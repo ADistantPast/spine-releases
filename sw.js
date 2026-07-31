@@ -15,7 +15,7 @@
    network — and it means a stale cache is served forever until the cache
    name changes. This bit us repeatedly while building: edits appeared to do
    nothing because the worker kept handing back the old file. */
-const VERSION = "spine-web-v7";
+const VERSION = "spine-web-v8";
 const SHELL = [
   ".", "index.html", "app.js", "shelf.js", "open.js", "style.css",
   "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-1024.png",

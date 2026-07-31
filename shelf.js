@@ -486,10 +486,18 @@
     canKeep, keepCopy, keptBlob, hasKept, dropCopy, askPersist, spaceLeft,
     heldAudio: id => attached.get(id) || null,
     /* A same-origin URL the worker answers with proper 206s, falling back
-       to the blob when there is no worker yet. */
-    audioUrl: id => {
+       to the blob when there is no worker yet.
+
+       "direct" asks for the blob outright. That is the escape hatch for a
+       browser whose media element never reaches the service worker at all:
+       WebKit has a long history there, and a page-level fetch succeeding
+       proves nothing, because it is the media load specifically that is
+       routed differently. Rather than guess which browsers are affected,
+       the reader tries the worker, and asks for this if the element says
+       it could not load. */
+    audioUrl: (id, mode) => {
       if (!audioUrls.has(id)) return "";
-      return workerServed()
+      return workerServed() && mode !== "direct"
         ? new URL(`spine-audio/${id}`, location.href).href
         : audioUrls.get(id);
     },

@@ -388,6 +388,8 @@ function renderBook(jumpTo) {
     pw.el.push(el);
   });
   nowIdx = -1; liveSeg = null; lastWordTop = -1;
+  readUpTo = -1; readMax = -1; readTarget = -1;   // a new DOM has no .read at all
+  if (readTimer !== null) { cancelAnimationFrame(readTimer); readTimer = null; }
 
   const done = performance.now();
   console.log(`[spine] ${pw.el.length} words | build ${Math.round(built - t0)}ms `
@@ -425,13 +427,82 @@ function wordAt(t) {
   return best;
 }
 
+/* Words behind the playhead are dimmed with .read. Keeping that true means
+   touching every word between where the highlight was and where it now is —
+   one class write per word while you listen, and twenty-two thousand of them
+   when you press "next chapter". Measured at 18ms on a desktop for a
+   five-chapter jump, and a phone is several times slower: that is the pause
+   you feel on the button.
+
+   Nobody can see more than a screenful, so the words around the new position
+   are corrected at once and the rest converge over the following frames.
+
+   Two pointers, because one is not enough and both earlier attempts proved
+   it. A cancellable queue silently abandoned whatever it had not reached, so
+   two quick taps of "previous chapter" left 3851 words wrongly dark. A
+   single pointer plus an immediate visible window was worse in a subtler
+   way: the window dirties words outside the pointer's range, so after five
+   taps forward and five back, 2004 words stayed dim above a pointer that
+   believed it had finished.
+
+   So: readUpTo is the prefix that definitely has .read, readMax is the
+   highest word that might. Convergence is both meeting readTarget, and it
+   cannot lose ground whatever order the jumps arrive in. */
+const READ_NOW = 500;          // corrected synchronously, around the playhead
+const READ_PER_FRAME = 4000;   // the invisible remainder, per frame
+let readUpTo = -1;             // 0..readUpTo definitely carry .read
+let readMax = -1;              // nothing above this carries it
+let readTarget = -1;
+let readTimer = null;
+
+const readSettled = () => readUpTo === readTarget && readMax === readTarget;
+
+function markRead(target) {
+  readTarget = Math.max(-1, Math.min(target, pw.el.length - 1));
+
+  // the screenful you are actually looking at, before the next paint
+  for (let j = Math.max(0, readTarget - READ_NOW); j <= readTarget; j++)
+    pw.el[j]?.classList.add("read");
+  if (readTarget > readMax) readMax = readTarget;
+  for (let j = readTarget + 1; j <= Math.min(readMax, readTarget + READ_NOW); j++)
+    pw.el[j]?.classList.remove("read");
+  /* Those removals are above readTarget, so pull the prefix down to meet it.
+     Without this the pointer can later resume adding from *above* a stretch
+     the window already cleared and skip it forever — a gap of up to
+     READ_NOW words, which is exactly what twelve random jumps produced.
+     Safe because readUpTo > readTarget means 0..readTarget were already
+     dimmed, so shortening the prefix claims nothing untrue. */
+  if (readUpTo > readTarget) readUpTo = readTarget;
+
+  stepRead(READ_NOW);
+  if (!readSettled() && readTimer === null)
+    readTimer = requestAnimationFrame(pumpRead);
+}
+
+function pumpRead() {
+  readTimer = null;
+  stepRead(READ_PER_FRAME);
+  if (!readSettled()) readTimer = requestAnimationFrame(pumpRead);
+}
+
+function stepRead(budget) {
+  while (budget-- > 0) {
+    if (readMax > readTarget) {
+      pw.el[readMax--]?.classList.remove("read");
+      if (readUpTo > readMax) readUpTo = readMax;
+    } else if (readUpTo < readTarget) {
+      pw.el[++readUpTo]?.classList.add("read");
+      if (readUpTo > readMax) readMax = readUpTo;
+    } else break;
+  }
+}
+
 /* quiet: light the word but do not scroll to it — for when the page has
    already been placed and a second scroll would only shift it. */
 function setNow(i, quiet) {
   if (nowIdx >= 0 && pw.el[nowIdx]) pw.el[nowIdx].classList.remove("now");
 
-  if (i > nowIdx) for (let j = nowIdx + 1; j <= i; j++) pw.el[j]?.classList.add("read");
-  else for (let j = i + 1; j <= nowIdx; j++) pw.el[j]?.classList.remove("read");
+  markRead(i);
 
   nowIdx = i;
   const el = pw.el[i];
@@ -1172,21 +1243,36 @@ audio.onplay = () => {
   startSaving();
 };
 audio.onpause = () => { $("playPause").textContent = "▶"; playUi(); stopSaving(); savePosition(); };
-/* A service worker is allowed to be stopped whenever the browser feels like
-   it, and comes back holding no audio — it answers 503 and the element
-   errors. That is recoverable and not the file's fault, so hand the book
-   over again and try once before saying anything. */
+/* Two things can go wrong here that are not the file's fault, so the reader
+   works through them before accusing it of anything.
+
+   One: a service worker is allowed to be stopped whenever the browser feels
+   like it, and comes back holding no audio — it answers 503 and the element
+   errors. Hand the book over again and ask for the same URL.
+
+   Two: the media element may never reach the service worker at all. That is
+   a browser-by-browser question with a long and unhappy history in WebKit,
+   and it cannot be settled by probing, because a page fetch takes a
+   different route than a media load. So the second attempt asks for the
+   blob directly, which needs no worker. Only if that fails too is there
+   really something wrong with the audio. */
 let audioRetry = 0;
 audio.addEventListener("loadeddata", () => { audioRetry = 0; });
 audio.onerror = () => {
-  if (book && audioRetry < 1 && SpineLocal.reoffer && SpineLocal.reoffer(book.id)) {
+  if (!book || !SpineLocal.hasAudio(book.id)) return;  // the missing-audio path speaks
+  const again = mode => {
+    const src = SpineLocal.audioUrl(book.id, mode);
+    if (!src) return false;              // never "" — see loadBook
     audioRetry++;
-    const at = audio.currentTime;
-    audio.src = SpineLocal.audioUrl(book.id);
-    audio.currentTime = at;
-    return;
-  }
-  if (book && !SpineLocal.hasAudio(book.id)) return;   // the missing-audio path speaks
+    // A failed load resets the element, so the place to come back to is the
+    // last one saved rather than whatever currentTime reads now.
+    const at = audio.currentTime || book.position || 0;
+    audio.src = src;
+    seekWhenReady(at);
+    return true;
+  };
+  if (audioRetry === 0 && SpineLocal.reoffer && SpineLocal.reoffer(book.id) && again()) return;
+  if (audioRetry <= 1 && again("direct")) return;
   toast("This file will not play. It may be a format the player cannot decode.");
 };
 
