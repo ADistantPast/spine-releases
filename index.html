@@ -48,6 +48,8 @@
         <h2>Open a book</h2>
         <p>Drop a <strong>.spinebook</strong> anywhere on this page, or
            <button class="linkish" id="blankPick">choose one</button>.</p>
+        <p class="blank-note">On a phone, choose <strong>Browse</strong> in the
+           picker — a book lives in Files, not in your photos.</p>
         <p class="blank-note">It is read from your own device. Nothing is
            uploaded — there is nowhere to upload it to.</p>
       </div>
@@ -172,7 +174,12 @@
 <!-- Anywhere on the page is a drop target; this only shows while dragging. -->
 <div class="dropveil" id="dropveil"><div>Drop the book to open it</div></div>
 
-<input type="file" id="filePick" accept=".spinebook,audio/*" hidden>
+<!-- Deliberately no accept attribute. iOS matches by type, not extension,
+     so ".spinebook" means nothing to it and "audio/*" turns the picker into
+     a media picker — Photo Library and Take Video, with no way to reach the
+     Files app at all. With no filter you get Browse, which is where a book
+     someone sent you actually lives. -->
+<input type="file" id="filePick" hidden>
 
 <!-- shelf.js stands in for the server app.js expects, so it has to be first -->
 <script src="shelf.js"></script>
