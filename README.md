@@ -33,13 +33,19 @@ The reader can install itself, with no app store and nothing to approve:
 
 | | |
 |---|---|
-| **Mac, Safari** | **File → Add to Dock** |
-| **Mac, Chrome or Edge** | the install icon in the address bar |
+| **Mac, Chrome or Edge** | the install icon in the address bar, right-hand end |
+| **Mac, Safari** | **File → Add to Dock** — needs macOS Sonoma or newer |
 | **iPhone or iPad** | Share → **Add to Home Screen** |
 | **Windows, Chrome or Edge** | the install icon in the address bar |
 
 You get a real icon, its own window with no browser around it, and it opens
 offline.
+
+**On a Mac, Chrome is the easier route**, and not only because older versions
+of Safari cannot do this at all — Safari has no *Add to Dock* before macOS
+Sonoma, and its File menu simply will not have the item. Safari is also the
+strictest browser about clearing stored data, so a book kept in Chrome is
+less likely to need fetching again.
 
 **Do this before you settle in with a book.** It is not decoration. Browsers
 are allowed to clear a website's stored data when space runs short, and
