@@ -20,11 +20,9 @@
     const big = file.size > 1.5e9;
     try {
       toast(big ? "Opening — a big book takes a moment…" : "Opening…");
-      const book = wantAudioFor
-        ? await SpineLocal.attachAudio(file)
-        : file.name.toLowerCase().endsWith(".spinebook")
-          ? await SpineLocal.addBundle(file)
-          : await SpineLocal.attachAudio(file);
+      // attachAudio decides for itself whether this is a bundle, by looking
+      // inside rather than at the name
+      const book = await SpineLocal.attachAudio(file);
       wantAudioFor = null;
       await loadBook(book.id, "last");
       toast(`Opened ${book.title || "the book"}`);
@@ -36,7 +34,7 @@
 
   const explain = code => ({
     "not-a-spinebook":
-      "That is not a Spine book. Export one from Spine with Export → Phone bundle.",
+      "That file is not a Spine book. Export one from Spine with Export → Phone bundle.",
     "no-audio": "That book has no audio inside it.",
     "audio-compressed":
       "That bundle was packed in a way this reader cannot read.",

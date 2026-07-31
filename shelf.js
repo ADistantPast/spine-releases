@@ -161,7 +161,12 @@
     return new Promise((res, rej) => {
       const t = d.transaction(STORE, mode);
       const out = fn(t.objectStore(STORE));
-      t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+      /* An IDB get for a key that is not there succeeds with result
+         undefined. Returning the request itself in that case — which the
+         first version did — hands back a truthy object, so "no such book"
+         read as "found one", and any file at all was accepted as a book
+         already in the library. Unwrap the request always. */
+      t.oncomplete = () => res(out instanceof IDBRequest ? out.result : out);
       t.onerror = () => rej(t.error);
     });
   }
@@ -209,8 +214,12 @@
    * picking the wrong one is caught rather than silently playing the wrong
    * book against the right words. */
   async function attachAudio(file) {
-    const bundleLike = file.name.toLowerCase().endsWith(".spinebook");
-    if (bundleLike) return addBundle(file);
+    /* By content, not by name. A file can arrive called .zip because a
+       transfer service rewrote it, or with no extension at all, or renamed
+       by whoever forwarded it — and the name is the one part of a file that
+       nothing guarantees. Every zip starts "PK", so looking is
+       cheaper and more honest than trusting the label. */
+    if (await looksLikeBundle(file)) return addBundle(file);
     const id = await idForAudio(file);
     const book = await getBook(id);
     if (!book) throw new Error("unknown-audio");
@@ -226,6 +235,15 @@
   }
 
   const hasAudio = id => audioUrls.has(id);
+
+  /* Four bytes is enough to tell a zip from an audio file. Whether it is a
+     Spine book specifically is settled by readBundle looking for book.json. */
+  async function looksLikeBundle(file) {
+    try {
+      const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+      return head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04;
+    } catch (e) { return false; }
+  }
 
 
   /* ------------------------------------------------- keeping a copy
@@ -446,6 +464,7 @@
     hasAudio,
     addBundle,
     attachAudio,
+    looksLikeBundle,
     idForAudio,
     getBook,
     listBooks: allBooks,
