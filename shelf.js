@@ -227,12 +227,35 @@
     return book;
   }
 
+  /* Hand the book's audio to whoever is going to serve it.
+
+     Preferred: the service worker, which answers Range requests like a
+     server would. A blob: URL is the fallback for a first visit before the
+     worker has taken control, and for anywhere workers are unavailable —
+     it works everywhere except, apparently, an iPhone. */
   function holdAudio(id, blob) {
     const old = audioUrls.get(id);
     if (old) URL.revokeObjectURL(old);
     attached.set(id, blob);
     audioUrls.set(id, URL.createObjectURL(blob));
+    tellWorker(id, blob);
   }
+
+  function tellWorker(id, blob) {
+    const c = navigator.serviceWorker && navigator.serviceWorker.controller;
+    if (c) try { c.postMessage({ type: "audio", id, blob }); } catch (e) {}
+  }
+
+  /* A worker can be stopped and restarted at any time, and comes back
+     holding nothing. Re-hand everything whenever one takes over. */
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      for (const [id, blob] of attached) tellWorker(id, blob);
+    });
+  }
+
+  const workerServed = () =>
+    !!(navigator.serviceWorker && navigator.serviceWorker.controller);
 
   const hasAudio = id => audioUrls.has(id);
 
@@ -430,6 +453,8 @@
       case "forget":
         await dropBook(rest);
         await dropCopy(rest);
+        { const c = navigator.serviceWorker && navigator.serviceWorker.controller;
+          if (c) try { c.postMessage({ type: "audio-drop", id: rest }); } catch (e) {} }
         audioUrls.delete(rest);
         attached.delete(rest);
         return { ok: true };
@@ -460,7 +485,15 @@
     api,
     canKeep, keepCopy, keptBlob, hasKept, dropCopy, askPersist, spaceLeft,
     heldAudio: id => attached.get(id) || null,
-    audioUrl: id => audioUrls.get(id) || "",
+    /* A same-origin URL the worker answers with proper 206s, falling back
+       to the blob when there is no worker yet. */
+    audioUrl: id => {
+      if (!audioUrls.has(id)) return "";
+      return workerServed()
+        ? new URL(`spine-audio/${id}`, location.href).href
+        : audioUrls.get(id);
+    },
+    reoffer: id => { const b = attached.get(id); if (b) tellWorker(id, b); return !!b; },
     hasAudio,
     addBundle,
     attachAudio,

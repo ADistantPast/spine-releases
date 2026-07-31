@@ -90,7 +90,18 @@ async function loadBook(id, startAt = "last") {
   $("blank").hidden = true;
   $("transport").hidden = false;
   positionJump();
-  audio.src = SpineLocal.audioUrl(id);
+  /* Only ever a real source. Assigning "" makes the browser resolve it
+     against the page URL, fetch the HTML, fail to decode it and fire
+     onerror — which reports "this file will not play". So a book waiting for
+     its audio accused itself of being corrupt, and the honest message
+     underneath it never got a word in. */
+  const src = SpineLocal.audioUrl(id);
+  if (src) {
+    audio.src = src;
+  } else {
+    audio.removeAttribute("src");
+    audio.load();               // drop whatever the last book left behind
+  }
   audio.playbackRate = SPEEDS[speedIdx];
   $("clockEnd").textContent = clock(b.duration);
   $("seek").max = Math.max(1, Math.floor(b.duration));
@@ -111,6 +122,7 @@ async function loadBook(id, startAt = "last") {
   updateTimeline(t);
   playUi();
   updateBookmarkUi();
+  placeCarets();
   positionScrollRail();
   setSleep(0);          // a timer set for the last book shouldn't stop this one
   mediaChapter = -1;    // force the lock screen onto the new book
@@ -278,7 +290,12 @@ function renderBook(jumpTo) {
     const words = seg.w && seg.w.length ? seg.w : [{ s: seg.s, e: seg.e, w: seg.t }];
     segStart.push(flat.length);
     for (const w of words) {
-      flat.push({ ...w, noteK: book.notes.findIndex(n => w.s < n.e && w.e > n.s) });
+      /* A note with no extent — made at a moment rather than over a phrase —
+         marks a point and highlights nothing. Without the n.e > n.s test it
+         still overlapped whatever word was being spoken, so the word lit up
+         *and* placeCarets() drew a bar against it: a line on a highlight,
+         which is neither of the two things a note is meant to look like. */
+      flat.push({ ...w, noteK: book.notes.findIndex(n => n.e > n.s && w.s < n.e && w.e > n.s) });
     }
   }
   flat.forEach((w, idx) => {
@@ -339,6 +356,9 @@ function renderBook(jumpTo) {
   console.log(`[spine] ${pw.el.length} words | build ${Math.round(built - t0)}ms `
     + `| innerHTML ${Math.round(painted - built)}ms | index ${Math.round(done - painted)}ms `
     + `| total ${Math.round(done - t0)}ms`);
+
+  // the page has just been rebuilt, so any carets went with it
+  placeCarets();
 
   if (jumpTo !== undefined) scrollToTime(jumpTo, "instant");
 }
@@ -1113,7 +1133,23 @@ audio.onplay = () => {
   startSaving();
 };
 audio.onpause = () => { $("playPause").textContent = "▶"; playUi(); stopSaving(); savePosition(); };
-audio.onerror = () => toast("This file will not play. It may be a format the player cannot decode.");
+/* A service worker is allowed to be stopped whenever the browser feels like
+   it, and comes back holding no audio — it answers 503 and the element
+   errors. That is recoverable and not the file's fault, so hand the book
+   over again and try once before saying anything. */
+let audioRetry = 0;
+audio.addEventListener("loadeddata", () => { audioRetry = 0; });
+audio.onerror = () => {
+  if (book && audioRetry < 1 && SpineLocal.reoffer && SpineLocal.reoffer(book.id)) {
+    audioRetry++;
+    const at = audio.currentTime;
+    audio.src = SpineLocal.audioUrl(book.id);
+    audio.currentTime = at;
+    return;
+  }
+  if (book && !SpineLocal.hasAudio(book.id)) return;   // the missing-audio path speaks
+  toast("This file will not play. It may be a format the player cannot decode.");
+};
 
 $("back30").onclick = () => playFrom(audio.currentTime - 30);
 $("fwd30").onclick = () => playFrom(audio.currentTime + 30);
@@ -1148,10 +1184,17 @@ $("seek").oninput = e => {
 };
 $("seek").onchange = () => { scrubChapter = -1; };
 
+/* The label moves on every tap; the audio pipeline hears one change once you
+   stop tapping. Cycling eight speeds with a finger meant eight rate changes
+   in half a second, each one a re-buffer, and each one firing ratechange at
+   the sleep timer and the lock screen too. Nothing downstream benefits from
+   seeing the speeds you passed through on the way. */
+let speedApply = null;
 $("speed").onclick = () => {
   speedIdx = (speedIdx + 1) % SPEEDS.length;
-  audio.playbackRate = SPEEDS[speedIdx];
   $("speed").textContent = `${SPEEDS[speedIdx]}X`;
+  clearTimeout(speedApply);
+  speedApply = setTimeout(() => { audio.playbackRate = SPEEDS[speedIdx]; }, 180);
 };
 
 /* ------------------------------------------------------------ sleep timer */
@@ -1442,6 +1485,62 @@ window.addEventListener("beforeunload", savePosition);
 const BM_HOLD_MS = 500;
 let bmHoldTimer = null, bmJumped = false;
 
+/* A bookmark and a note are points in time. On the timeline they are marks;
+   in the text they were nothing at all — so a note that happened to cover no
+   word left no trace on the page, and the bookmark was invisible while
+   reading. Both get a thin caret sitting between the words where they fall.
+
+   Rebuilt rather than moved, because the page is rebuilt whenever the book
+   is, and there are only ever a handful of these. */
+/* Half the width of a space, in the reading face at its current size.
+
+   The caret is inserted between two word spans, and each span carries its
+   own leading space — so its origin is the left edge of the gap, not the
+   middle of it, and the bar lands hard against the word before. Nudging it
+   by half a space centres it. Measured rather than guessed at: the figure
+   depends on the typeface and the size, both of which change between the
+   desktop, the phone and the pop-out. */
+function halfSpaceNudge(page) {
+  const probe = t => {
+    const s = document.createElement("span");
+    s.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
+    s.textContent = t;
+    page.appendChild(s);
+    const w = s.getBoundingClientRect().width;
+    s.remove();
+    return w;
+  };
+  // "a a" minus "aa" — a lone space in a hidden span is not reliable
+  const space = probe("a a") - probe("aa");
+  return space > 0 ? space / 2 - 1 : 0;   // less half the 2px bar
+}
+
+function placeCarets() {
+  document.querySelectorAll("#page .caret").forEach(el => el.remove());
+  if (!book || !pw.el.length) return;
+  const page = $("page");
+  page.style.setProperty("--caret-nudge", `${halfSpaceNudge(page).toFixed(2)}px`);
+
+  const drop = (t, cls, label) => {
+    const i = wordAt(t);
+    const el = pw.el[Math.max(0, i)];
+    if (!el || !el.parentElement) return;
+    const c = document.createElement("span");
+    c.className = "caret " + cls;   // the bar itself is drawn in CSS
+    c.title = label;
+    el.after(c);
+  };
+
+  if (book.bookmark != null) drop(book.bookmark, "bm", `Bookmark · ${clock(book.bookmark)}`);
+
+  /* Exactly the notes that light no word, decided by the same test
+     renderBook uses — the two drifting apart is what put a bar on top of a
+     highlight. A note over a phrase is already visible as the phrase. */
+  (book.notes || []).forEach(n => {
+    if (!(n.e > n.s)) drop(n.s, "nt", n.text || "Note");
+  });
+}
+
 function updateBookmarkUi() {
   const btn = $("btnBookmark"), mark = $("bookMark");
   const at = book && book.bookmark != null ? book.bookmark : null;
@@ -1475,6 +1574,7 @@ $("btnBookmark").onclick = async () => {
   const r = await api(`/api/bookmark/${book.id}`, { t });
   book.bookmark = r.bookmark;
   updateBookmarkUi();
+  placeCarets();
   toast(`Bookmarked at ${clock(t)}`);
 };
 
@@ -1538,24 +1638,67 @@ async function saveNotes(notes) {
 
 $("page").addEventListener("mouseup", () => {
   if (compact) return;
+  const picked = selectedWordRange();
+  if (!picked) return;
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-  const range = sel.getRangeAt(0);
-  const startEl = range.startContainer.parentElement?.closest(".w");
-  const endEl = range.endContainer.parentElement?.closest(".w");
-  if (!startEl || !endEl) return;
-  const s = parseFloat(startEl.dataset.s), e = parseFloat(endEl.dataset.e);
-  if (!(e > s)) return;
-  const rect = range.getBoundingClientRect();
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
   sel.removeAllRanges();
-  openNotePop({ kind: "new", s, e }, rect);
+  openNotePop({ kind: "new", ...picked }, rect);
 });
 
+/* Note what you selected, or note where you are.
+
+   Selecting words and then reaching for the button is the obvious way to
+   make a note about a phrase, and it used to be ignored — the button always
+   took the whole sentence being spoken, so a note meant to sit on one word
+   lit up a paragraph. A selection wins; failing that it marks the word
+   actually being read, not the sentence around it. */
 $("btnNoteHere").onclick = () => {
-  if (!book || !lyric.length) return;
-  const line = lyric[posAt(lyric, audio.currentTime)];   // the sentence on screen
-  openNotePop({ kind: "new", s: line.s, e: line.e }, $("btnNoteHere").getBoundingClientRect());
+  if (!book) return;
+  const picked = selectedWordRange();
+  if (picked) return openNotePop({ kind: "new", ...picked },
+                                 $("btnNoteHere").getBoundingClientRect());
+  const w = pw.el[nowIdx];
+  const s = w ? parseFloat(w.dataset.s) : audio.currentTime;
+  const e = w ? parseFloat(w.dataset.e) : audio.currentTime;
+  openNotePop({ kind: "new", s, e }, $("btnNoteHere").getBoundingClientRect());
 };
+
+/* The words the reader has selected, as a time range — or null. Shared by
+   the button and the popover that appears on releasing a selection. */
+function selectedWordRange() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  const page = $("page");
+  if (!page.contains(range.commonAncestorContainer)) return null;
+
+  // A selection dragged through text puts its ends inside word spans, and
+  // this is all it takes.
+  const edge = n => n && (n.nodeType === 1 ? n : n.parentElement)?.closest?.(".w[data-s]");
+  let first = edge(range.startContainer);
+  let last = edge(range.endContainer);
+
+  /* But a double-click, a triple-click, or select-all put the boundary
+     *between* elements instead, where there is no word to find — and the
+     note then silently fell back to whatever was playing. Ask the range
+     which words it actually touches.
+
+     Scoped to the paragraphs it crosses, not the page: the whole book is
+     91k word spans in one element, and asking each of them would be a
+     visible pause on a selection. */
+  if (!first || !last) {
+    const segs = [...page.children].filter(sg => range.intersectsNode(sg));
+    const words = segs.flatMap(sg => [...sg.querySelectorAll(".w[data-s]")])
+                      .filter(w => range.intersectsNode(w));
+    if (!words.length) return null;
+    first = first || words[0];
+    last = last || words[words.length - 1];
+  }
+
+  const s = parseFloat(first.dataset.s), e = parseFloat(last.dataset.e);
+  return e > s ? { s, e } : null;
+}
 
 /* ------------------------------------------------------------ drawers */
 

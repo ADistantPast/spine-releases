@@ -170,9 +170,27 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   text-shadow:0 0 6px rgba(95,211,196,.45), 0 0 16px rgba(95,211,196,.25), 0 0 28px rgba(95,211,196,.1);
 }
 .w.hit{background:rgba(192,103,74,.28);opacity:1}
-.w.noted{background:rgba(125,164,99,.26);opacity:1;cursor:pointer;border-radius:0}
-.w.noted.noted-start{border-top-left-radius:4px;border-bottom-left-radius:4px}
-.w.noted.noted-end{border-top-right-radius:4px;border-bottom-right-radius:4px}
+/* The highlight should sit around the words evenly.
+
+   Two things stop that happening on their own. Vertically, an inline
+   background is only as tall as the glyphs, so it reads as a stripe through
+   the middle of the line — padding fixes it, and .page's 1.85 line-height
+   leaves enough leading that it never touches the line above or below.
+
+   Horizontally, each word span *contains* its own leading space, so a run
+   already carries a space of background before its first letter and stops
+   flush against the last. Matching that after the final word is what makes
+   the two ends look the same; the negative margin keeps the following text
+   from shifting to pay for it. */
+.w.noted{
+  background:rgba(125,164,99,.26);opacity:1;cursor:pointer;border-radius:0;
+  padding-top:.16em;padding-bottom:.16em;
+}
+.w.noted.noted-start{border-top-left-radius:5px;border-bottom-left-radius:5px}
+.w.noted.noted-end{
+  border-top-right-radius:5px;border-bottom-right-radius:5px;
+  padding-right:.26em;margin-right:-.26em;
+}
 .seg.live .w.read{opacity:.88}
 .seg.live{color:var(--bone)}
 
@@ -270,7 +288,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   border:1px solid transparent;
 }
 .tp:hover{background:var(--slab)}
-.tp.wide{font-family:var(--ui);font-size:12.5px;border-color:var(--hair)}
+/* No border of its own. In portrait the whole tray row is given one, so
+   Mark blended in; past the phone breakpoint — a phone turned sideways —
+   that row rule stops applying and Mark was left the only outlined
+   button on the bar. Whatever the row wears, it wears. */
+.tp.wide{font-family:var(--ui);font-size:12.5px}
 .tp.play{
   background:var(--bone);color:var(--ink);width:46px;font-size:14px;font-weight:700;
 }
@@ -974,3 +996,23 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    costs hundreds of megabytes and should never look like the default. */
 .keep-btn.on{color:var(--verdigris);border-color:rgba(95,211,196,.45)}
 .keep-btn:disabled{opacity:.7;cursor:default}
+
+/* A bookmark and a point-in-time note have no word to colour, so they stand
+   between the words instead.
+
+   Drawn, not typed. The first version used a literal "|", which is a glyph
+   in the reading serif — it inherits that face's weight and slab, reads as
+   punctuation someone left in the text, and changes size with the font. A
+   two-pixel rule is the same idea without pretending to be a character, and
+   it can carry the same faint glow the lit word uses so it belongs to the
+   interface rather than the prose. Zero width, so no word ever moves. */
+.caret{
+  display:inline-block;width:0;overflow:visible;position:relative;cursor:default;
+}
+.caret::before{
+  content:"";position:absolute;left:var(--caret-nudge, -1px);bottom:-.16em;
+  width:2px;height:1.05em;border-radius:1px;
+  background:currentColor;box-shadow:0 0 6px currentColor;opacity:.9;
+}
+.caret.bm{color:var(--flag)}
+.caret.nt{color:var(--moss)}
