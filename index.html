@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spine</title>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#12161C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Spine">
+<link rel="apple-touch-icon" href="icon-180.png">
+</head>
+<body>
+
+<div class="app" id="app">
+  <main class="main">
+
+    <header class="bar" id="bar">
+      <div class="bar-title">
+        <p class="bar-sub" id="subtitle">Nothing open</p>
+        <h1 id="title" contenteditable="false" spellcheck="false">Spine</h1>
+      </div>
+      <div class="bar-tools">
+        <label class="find">
+          <input id="find" type="search" placeholder="Find a word or chapter" autocomplete="off">
+        </label>
+        <button class="btn" id="btnImport">Import</button>
+        <button class="btn ghost" id="btnLibrary">Library</button>
+        <button class="btn ghost" id="btnChapters">Chapters</button>
+        <button class="btn ghost" id="btnNotes">Notes</button>
+      </div>
+      <!-- A phone has no window to pop out of, so this reads as a plain
+           switch back to the full page rather than a "close the pop-out". -->
+      <button class="btn ghost pop-exit" id="btnPopExit" title="Back to the full page">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+             stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M4.5 6 H19.5 M4.5 12 H19.5 M4.5 18 H14" />
+        </svg>
+        Full page
+      </button>
+    </header>
+
+    <section class="reader" id="reader" tabindex="0">
+      <div class="blank" id="blank" hidden>
+        <p class="blank-mark">▚</p>
+        <h2>Open a book</h2>
+        <p>Drop a <strong>.spinebook</strong> anywhere on this page, or
+           <button class="linkish" id="blankPick">choose one</button>.</p>
+        <p class="blank-note">It is read from your own device. Nothing is
+           uploaded — there is nowhere to upload it to.</p>
+      </div>
+      <article class="page" id="page"></article>
+    </section>
+    <div class="scroll-rail" id="scrollRail"></div>
+
+    <section class="lyric" id="lyricView">
+      <div class="lyric-lines" id="lyricLines"></div>
+    </section>
+
+    <footer class="transport" id="transport" hidden>
+      <div class="grab" id="grab" title="Swipe up for more controls"></div>
+
+      <div class="tp-row primary">
+        <button class="tp" id="prevCh" title="Previous chapter">|&#9664;</button>
+        <button class="tp" id="back30" title="Back 30 seconds">&#9664;&thinsp;30</button>
+        <button class="tp play" id="playPause" title="Play or pause (space)">&#9654;</button>
+        <button class="tp" id="fwd30" title="Forward 30 seconds">30&thinsp;&#9654;</button>
+        <button class="tp" id="nextCh" title="Next chapter">&#9654;|</button>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <span class="clock" id="clockNow">0:00:00</span>
+        <div class="track" id="track">
+          <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Position">
+          <!-- Where playback actually is, and where the bookmark sits. Both
+               sit under the thumb (see .marks z-index) so dragging never
+               hides behind them. -->
+          <div class="marks">
+            <div class="mark" id="bookMark" hidden></div>
+            <div class="mark" id="playMark"></div>
+          </div>
+          <div class="ticks" id="ticks"></div>
+        </div>
+        <span class="clock dim" id="clockEnd">0:00:00</span>
+      </div>
+
+      <div class="tp-row more">
+        <button class="tp wide" id="btnMark" title="Put a chapter mark at this moment">Mark</button>
+        <button class="tp icon-btn" id="btnBookmark" title="Save a bookmark to resume from later">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M6.5 3.5 H17.5 V20.5 L12 15 L6.5 20.5 Z" />
+          </svg>
+        </button>
+        <button class="tp icon-btn note-btn" id="btnNoteHere" title="Add a note at this moment">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+            <rect x="4.5" y="3.5" width="15" height="17" rx="2.5" />
+            <path d="M8.5 9 H15.5 M8.5 13 H15.5 M8.5 17 H13" />
+          </svg>
+        </button>
+        <button class="tp" id="speed" title="Playback speed">1.0X</button>
+        <button class="tp" id="sleep" title="Stop playing after a while">Timer</button>
+        <!-- not the desktop's pop-out arrow: nothing pops out on a phone,
+             this just switches to the one-sentence reading view -->
+        <button class="tp icon-btn" id="btnPop" title="Reading view">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M4.5 7 H19.5 M4.5 12 H19.5 M7.5 17 H16.5" />
+          </svg>
+        </button>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- drawers -->
+<div class="scrim" id="scrim"></div>
+
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <h3 id="drawerTitle">Chapters</h3>
+    <button class="x" id="drawerClose" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<!-- note popover -->
+<div class="note-pop" id="notePop" hidden>
+  <textarea class="note-pop-text" id="notePopText" placeholder="Add a note…" maxlength="500"></textarea>
+  <div class="note-pop-actions">
+    <button class="x" id="notePopDelete" title="Delete this note" hidden>Delete</button>
+    <button class="btn ghost" id="notePopCancel">Cancel</button>
+    <button class="btn" id="notePopSave">Save</button>
+  </div>
+</div>
+
+<!-- update notice -->
+<div class="update" id="update" hidden>
+  <div class="update-text">
+    <strong id="updateTitle">Update available</strong>
+    <span id="updateNotes"></span>
+  </div>
+  <button class="btn" id="updateGo">Install</button>
+  <button class="x" id="updateLater" title="Not now">✕</button>
+</div>
+
+<!-- Press and hold the scrub track to spin through chapters. Shown and hidden
+     by the .show class only — never the hidden attribute, which would beat
+     the display:flex here (see [hidden] in style.css). -->
+<div class="chapter-pick" id="chapterPick" aria-hidden="true">
+  <div class="cp-window"><div class="cp-reel" id="cpReel"></div></div>
+  <div class="cp-name" id="cpName"></div>
+</div>
+
+<!-- back to the playhead. Shown whenever the view has drifted off it,
+     paused or not — with the bar browsing rather than seeking, reading
+     somewhere else while paused is an ordinary thing to be doing. -->
+<button class="jump" id="jumpNow" aria-label="Snap back to the playhead">
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+       stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M12 4.5 V19.5 M6.5 14 L12 19.5 L17.5 14" />
+  </svg>
+  <span>Snap to playhead</span>
+</button>
+
+<div class="toast" id="toast" hidden></div>
+<audio id="audio" preload="metadata"></audio>
+
+<!-- Anywhere on the page is a drop target; this only shows while dragging. -->
+<div class="dropveil" id="dropveil"><div>Drop the book to open it</div></div>
+
+<input type="file" id="filePick" accept=".spinebook,audio/*" hidden>
+
+<!-- shelf.js stands in for the server app.js expects, so it has to be first -->
+<script src="shelf.js"></script>
+<script src="open.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

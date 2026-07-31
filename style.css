@@ -1,0 +1,976 @@
+/* Spine (companion) — same palette as the desktop app's style.css. */
+
+:root{
+  --ink:#12161C;
+  --ink-2:#0D1116;
+  --slab:#1A2029;
+  --slab-2:#222A35;
+  --bone:#E7E2D6;
+  --verdigris:#5FD3C4;
+  --oxide:#C0674A;
+  /* the lower of the two staggered chapter rows — same hue, burnt back a
+     little so the two rows read as two rows at a glance */
+  --oxide-low:#9C4F37;
+  --moss:#7DA463;
+  --gilt:#C8A54B;
+  --dust:#79828F;
+  --hair:#2A3441;
+  /* bookmarks — a warmer, redder flag than --oxide's chapter orange, so the
+     two never read as the same mark on the timeline */
+  --flag:#D2544B;
+
+  --ui:"Bahnschrift SemiCondensed","Bahnschrift","Segoe UI Variable Display","Roboto",system-ui,sans-serif;
+  --read:"Sitka Text","Constantia","Cambria",Georgia,serif;
+  --data:"Cascadia Mono","Consolas","Roboto Mono",ui-monospace,monospace;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}   /* our display:flex rules must not beat this */
+html,body{height:100%;margin:0}
+body{
+  background:var(--ink); color:var(--bone);
+  font-family:var(--ui);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+  /* Android's WebView flashes a translucent blue block over whatever box it
+     thinks you tapped — on a wide row like a library entry that's most of
+     the screen, and it fights every colour in the palette. The app draws its
+     own :active states, so this is pure noise. */
+  -webkit-tap-highlight-color:transparent;
+}
+button{
+  font-family:inherit;color:inherit;cursor:pointer;border:0;background:none;
+  /* stops a firm press turning a button's label blue as if it were prose.
+     Deliberately not on the reader — selecting words there is how notes are
+     made (see the mouseup handler in app.js). */
+  -webkit-user-select:none;user-select:none;
+  -webkit-touch-callout:none;
+}
+:focus-visible{outline:2px solid var(--verdigris);outline-offset:2px}
+
+.app{display:flex;height:100%}
+
+/* ---------------------------------------------------------- top bar */
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+
+.bar{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:20px;
+  padding:20px 34px 16px;border-bottom:1px solid var(--hair);
+  flex:0 0 auto;   /* or a narrow screen squeezes it below its own content */
+}
+.bar-title{min-width:0}
+h1{
+  margin:0;font-size:21px;font-weight:600;letter-spacing:.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46ch;
+  border-bottom:1px solid transparent;
+}
+h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
+.bar-sub{
+  /* sits above the title now, so the spacing hangs below it instead */
+  margin:0 0 3px;font-family:var(--data);font-size:11px;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--dust);
+}
+.bar-tools{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+
+.btn{
+  padding:8px 14px;border-radius:6px;font-size:13px;
+  background:var(--verdigris);color:#0A1416;font-weight:600;
+  transition:filter .12s ease;
+}
+.btn:hover{filter:brightness(1.1)}
+/* Replaces the tap highlight suppressed up top. :hover is meaningless on a
+   touch screen — it latches on after a tap and stays until you touch
+   something else — so :active is the only honest press state here. */
+.btn:active{filter:brightness(.88)}
+.btn.ghost{
+  background:none;color:var(--bone);font-weight:500;
+  border:1px solid var(--hair);
+}
+.btn.ghost:hover{border-color:var(--dust);filter:none}
+.btn.ghost:active{background:var(--slab-2);border-color:var(--dust);filter:none}
+
+.find input{
+  width:210px;padding:8px 12px;border-radius:6px;
+  background:var(--slab);border:1px solid var(--hair);
+  color:var(--bone);font-size:13px;font-family:inherit;
+}
+.find input::placeholder{color:var(--dust)}
+.find input:focus{outline:none;border-color:var(--verdigris)}
+
+/* ---------------------------------------------------------- reader */
+
+.reader{flex:1;overflow-y:auto;scroll-behavior:smooth;outline:none}
+/* Chunkier than the desktop's 16px: on a phone this is the main way to move
+   through an 8-hour book by thumb, so the bar has to read as a grabbable
+   object rather than a hairline. */
+.reader::-webkit-scrollbar{width:24px}
+/* no slab of track behind the thumb — at 24px wide that reads as a bar
+   painted down the edge of the page rather than a scrollbar */
+.reader::-webkit-scrollbar-track{background:transparent}
+/* A wider invisible strip laid over the scrollbar's edge — the visible bar
+   is still narrower than a fingertip. This catches drags starting anywhere
+   within 44px of the edge, and pointer capture (in app.js) keeps tracking
+   the finger even once it wanders back toward the centre mid-drag. */
+.scroll-rail{position:fixed;right:0;width:44px;z-index:5;touch-action:none;display:none}
+.app.compact .scroll-rail{display:none!important}
+.reader::-webkit-scrollbar-thumb{
+  background:var(--dust);border-radius:12px;min-height:64px;
+  border:5px solid var(--ink);   /* inset look, but a full-width grab target */
+  background-clip:padding-box;
+}
+/* :hover never resolves cleanly on touch — :active is what actually fires
+   while a thumb is down on the bar */
+.reader::-webkit-scrollbar-thumb:active{background:var(--verdigris);background-clip:padding-box}
+
+.page{
+  max-width:64ch;margin:0 auto;padding:8vh 34px 46vh;
+  font-family:var(--read);font-size:20px;line-height:1.85;
+}
+/* With nothing imported, .page is empty but its 54vh of padding still makes
+   the reader taller than the screen — so the blank state got a full-height
+   scrollbar sitting next to it with nothing to scroll. Collapse the padding
+   until there are actually words to pad.
+   Deliberately an ID selector: the responsive rule further down is
+   `.page` inside the phone media query, which outranks `.page:empty` by
+   source order. The ID (1,0,0) settles it without !important. */
+#page:empty{padding:0}
+.seg{
+  margin:0 0 1.05em;
+  content-visibility:auto;      /* don't render what's off-screen */
+  contain-intrinsic-size:auto 7em;   /* keeps the scrollbar honest */
+}
+/* content-visibility:auto forces paint containment unconditionally, not
+   just while off-screen — it clips anything a descendant paints past this
+   box's edge, including the outer, faint layers of .w.now's text-shadow
+   glow whenever the lit word falls on a paragraph's first or last line.
+   content-visibility:visible turns containment off entirely for whichever
+   paragraph is currently playing (the only one that can have a glowing
+   word), so this costs nothing and every other paragraph keeps the full
+   perf win untouched. */
+.seg.live{content-visibility:visible}
+.chapter-rule{
+  margin:2.4em 0 1.6em;display:flex;align-items:center;gap:14px;
+  font-family:var(--ui);font-size:11px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dust);
+}
+.chapter-rule::after{content:"";flex:1;height:1px;background:var(--hair)}
+
+.w{
+  color:var(--bone);opacity:.34;border-radius:4px;
+  transition:opacity .18s ease,color .18s ease;
+}
+.w.read{opacity:.62}
+/* the spoken chapter announcement, gilded. sits before .w.now so the
+   playhead colour still wins while those words are actually being read */
+.w.head{color:var(--gilt);opacity:1;font-weight:600}
+.w.head-end::after{content:":"}
+.w.now{
+  opacity:1;color:var(--verdigris);
+  text-shadow:0 0 6px rgba(95,211,196,.45), 0 0 16px rgba(95,211,196,.25), 0 0 28px rgba(95,211,196,.1);
+}
+.w.hit{background:rgba(192,103,74,.28);opacity:1}
+.w.noted{background:rgba(125,164,99,.26);opacity:1;cursor:pointer;border-radius:0}
+.w.noted.noted-start{border-top-left-radius:4px;border-bottom-left-radius:4px}
+.w.noted.noted-end{border-top-right-radius:4px;border-bottom-right-radius:4px}
+.seg.live .w.read{opacity:.88}
+.seg.live{color:var(--bone)}
+
+.blank{
+  max-width:44ch;margin:0 auto;padding:16vh 34px;text-align:center;color:var(--dust);
+}
+.blank h2{
+  font-family:var(--read);font-size:26px;font-weight:400;
+  color:var(--bone);margin:0 0 12px;
+}
+.blank p{font-size:14.5px;line-height:1.7;margin:0 0 22px}
+.blank-mark{
+  font-size:34px;color:var(--verdigris);margin:0 0 18px;letter-spacing:.3em;
+}
+
+/* ---------------------------------------------------------- lyric view */
+
+/* Scrolled rather than flex-centred: a centred flex column silently clips
+   its overflow at small window sizes, and the compact window is small by
+   definition. The generous vertical padding lets the very first and last
+   sentence still sit in the middle when scrolled to. */
+.lyric{flex:1;display:none;overflow-y:auto;position:relative;scrollbar-width:none}
+.lyric::-webkit-scrollbar{display:none}
+/* vh, not %: percentage padding resolves against the *width*, which made
+   the pad wildly wrong as the window changed shape */
+.lyric-lines{
+  /* --lyric-now is the *active* size and every line is laid out at it; see
+     .lyric-line. Set it per breakpoint rather than setting font-size twice. */
+  --lyric-now:21px;
+  --lyric-rest:.66;      /* how far back the inactive lines are scaled */
+  display:flex;flex-direction:column;align-items:center;gap:.28em;
+  width:100%;text-align:center;padding:45vh 6vw;
+}
+/* One sentence reads at a time: the current one full-strength and larger,
+   everything around it smaller and faded back.
+
+   Every line is laid out at the *active* size and the inactive ones are
+   shrunk with a transform, rather than each carrying its own font-size.
+   That is the whole fix for the sentence change "snaking": font-size is a
+   layout property, so growing the live line reflowed every line beneath it —
+   measured at 40 of the 81 laid-out lines shifting 11-60px on a single
+   advance, while the smooth scroll was moving at the same time. The two
+   motions fought and the text appeared to slither into place. transform is
+   composited and reserves no space, so the column is now completely static
+   and only the highlight and the scroll move.
+   Consequences worth knowing: line-height and font-weight must be identical
+   in all three states (both are layout properties too — a bolder live line
+   would re-wrap and reintroduce the shift), and gap is small because every
+   box is already reserving active-size height.
+   No content-visibility here, unlike .seg: windowLyric() already keeps the
+   laid-out count tiny, and paint containment would clip the current word's
+   glow and make offsetTop (which centreLyric depends on) an estimate. */
+.lyric-line{
+  font-family:var(--read);
+  font-size:var(--lyric-now);
+  line-height:1.4;font-weight:600;
+  color:var(--bone);opacity:.2;
+  transform:scale(var(--lyric-rest));
+  transform-origin:center center;
+  transition:opacity .28s ease, transform .28s cubic-bezier(.22,1,.36,1);
+  max-width:56ch;margin:0;
+}
+.lyric-line.near{opacity:.4}
+.lyric-line.now{opacity:1;transform:scale(1);color:var(--bone)}
+/* the same playhead treatment the reader uses, so the word being spoken
+   reads identically in both views */
+.lw{transition:color .18s ease}
+.lw.now{
+  color:var(--verdigris);
+  text-shadow:0 0 6px rgba(95,211,196,.45), 0 0 16px rgba(95,211,196,.25), 0 0 28px rgba(95,211,196,.1);
+}
+
+/* ---------------------------------------------------------- transport */
+
+.transport{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 34px;border-top:1px solid var(--hair);
+  background:var(--ink-2);flex:0 0 auto;
+}
+/* The chapter numbers hang above the track without adding any height of
+   their own, so the bar has to be told to make room or they sit flush on the
+   reader's last line. Padding rather than a taller track: the buttons and the
+   track stay centred on each other, the extra space appears only above. One
+   row of numbers reaches ~24px over the track's centre, two rows ~30px. */
+/* Symmetric on purpose. Padding only at the top gave the numbers their room
+   but left the play button sitting high in the bar — 27px of air above it and
+   12px below. Matching the bottom puts every control back on the bar's centre
+   line while the numbers still clear the reader's last line above. */
+.transport.has-ticks{padding-top:18px;padding-bottom:18px}
+.transport.has-ticks.two-rows{padding-top:22px;padding-bottom:22px}
+.tp{
+  min-width:42px;height:34px;padding:0 10px;border-radius:6px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-family:var(--data);font-size:12px;color:var(--bone);
+  border:1px solid transparent;
+}
+.tp:hover{background:var(--slab)}
+.tp.wide{font-family:var(--ui);font-size:12.5px;border-color:var(--hair)}
+.tp.play{
+  background:var(--bone);color:var(--ink);width:46px;font-size:14px;font-weight:700;
+}
+.tp.play:hover{filter:brightness(1.06);background:var(--bone)}
+.tp.icon-btn{display:inline-flex;align-items:center;justify-content:center}
+/* A bookmark exists. Deliberately the one red thing in the transport — it
+   is the only control whose state you need to read at a glance. */
+#btnBookmark.set{color:var(--flag)}
+#btnBookmark.set svg{fill:rgba(210,84,75,.22)}
+
+/* The note button carries the notes colour, the same green their ticks use
+   on the timeline, so the button and the marks it makes are obviously the
+   same thing. Deliberately an ID (1,0,0): .tp.icon-btn and .tp.note-btn are
+   both (0,2,0), so between them it is a source-order coin flip. */
+#btnNoteHere{color:var(--moss)}
+#btnNoteHere svg{fill:rgba(125,164,99,.16)}
+
+.tp-row{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.grab{display:none}   /* only the phone layout uses the swipe handle */
+
+/* -------------------------------------------------- the timeline */
+
+.timeline{flex:1;display:flex;align-items:center;gap:12px;min-width:0}
+.clock{font-family:var(--data);font-size:11.5px;letter-spacing:.03em}
+#clockNow{cursor:pointer;border-bottom:1px solid transparent;padding-bottom:1px}
+#clockNow:hover{border-bottom-color:var(--dust)}
+#clockNow[contenteditable="true"]{
+  outline:none;border-bottom-color:var(--verdigris);color:var(--verdigris);
+}
+.clock.dim{color:var(--dust)}
+
+.track{position:relative;flex:1;height:34px}
+/* The rule the thumb runs along. It used to be #seek's own background, which
+   made it impossible to put anything between the line and the thumb — the
+   line painted over the play and bookmark marks and cut them in half. Its
+   own layer at the bottom gives the three things a real order:
+   line (0) -> marks (1) -> thumb (#seek, 2). */
+.track::before{
+  content:"";position:absolute;left:0;right:0;top:50%;height:3px;
+  transform:translateY(-50%);background:var(--hair);
+}
+#seek{
+  position:absolute;left:0;top:0;width:100%;height:34px;z-index:2;margin:0;
+  -webkit-appearance:none;appearance:none;
+  background:transparent;
+  cursor:pointer;
+  touch-action:pan-y;
+}
+#seek::-webkit-slider-thumb{
+  /* a rounded square rather than a dot: smaller, and it reads as a
+     marker on a ruled track instead of a bead on a string */
+  -webkit-appearance:none;width:11px;height:11px;border-radius:3.5px;
+  background:var(--verdigris);border:0;
+}
+
+/* Inset by exactly half the seek thumb, because that is how far in the
+   thumb's centre can travel — get this wrong and every chapter tick sits
+   off its real position. Thumb is 11px here, 14px on a phone. */
+/* Where playback actually is, and where the bookmark sits.
+
+   z-index 1, under #seek's 2, so the thumb always paints over them — the
+   thumb is the thing you drag and it must never look like it is hiding
+   behind a marker. Same inset as .ticks, and for the same reason: half the
+   thumb's width is exactly how far its centre can travel. */
+.marks{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none;z-index:1}
+.mark{
+  position:absolute;top:50%;left:0;width:6px;height:6px;   /* half the thumb */
+  border-radius:2px;transform:translate(-50%,-50%);
+}
+/* The ring is not decoration: a 6px square sitting on a 3px rule needs an
+   edge or it reads as a lump in the line. */
+#playMark{background:var(--verdigris);box-shadow:0 0 0 1.5px var(--ink)}
+#bookMark{background:var(--flag);box-shadow:0 0 0 1.5px var(--ink)}
+
+.ticks{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none}
+.tick{
+  position:absolute;top:50%;left:0;width:1px;height:10px;
+  transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;
+}
+.tick::before{content:"";position:absolute;inset:0;background:var(--oxide)}
+.tick-n{
+  position:absolute;bottom:calc(100% + 3px);left:50%;transform:translateX(-50%);
+  font-family:var(--data);font-size:9px;color:var(--oxide);white-space:nowrap;
+  transition:color .12s ease;
+}
+.tick:hover::before,.tick.on::before{background:var(--verdigris)}
+.tick:hover .tick-n,.tick.on .tick-n{color:var(--bone)}
+
+.tick.note{transform:translate(-50%,0)}
+.tick.note::before{background:var(--moss)}
+.tick.note .tick-n{bottom:auto;top:calc(100% + 3px);color:var(--moss)}
+.tick.note:hover::before{background:var(--bone)}
+.tick.note:hover .tick-n{color:var(--bone)}
+
+/* Every other chapter number drops to a second line once they get close
+   enough to collide (drawTicks decides). The tick itself grows to reach the
+   raised label so the number still reads as attached to its mark rather than
+   floating above the one next to it. */
+.timeline.stagger .tick.alt{height:19px}
+.timeline.stagger .tick.alt .tick-n{bottom:calc(100% + 3px)}
+/* Two rows of numbers are easier to read apart if they aren't the identical
+   colour: the near row sits back a shade, the raised row keeps full --oxide.
+   :hover / .on have to be restated at this specificity — these selectors
+   are heavier than the plain .tick:hover rules above, so without them the
+   playhead highlight would stop working on the near row alone. */
+.timeline.stagger .tick:not(.alt)::before{background:var(--oxide-low)}
+.timeline.stagger .tick:not(.alt) .tick-n{color:var(--oxide-low)}
+.timeline.stagger .tick:not(.alt):hover::before,
+.timeline.stagger .tick:not(.alt).on::before{background:var(--verdigris)}
+.timeline.stagger .tick:not(.alt):hover .tick-n,
+.timeline.stagger .tick:not(.alt).on .tick-n{color:var(--bone)}
+/* Past the point where even two rows fit, the marks are a picket fence and
+   the numbers are unreadable — drop both and leave a clean scrub bar rather
+   than a smear. Nothing is lost permanently: fitTickLabels() re-measures on
+   every resize, so rotating or unfolding the phone widens the track and
+   brings the chapters straight back. Note ticks stay; there are rarely
+   enough of them to crowd. */
+.timeline.dense .tick:not(.note){display:none}
+
+/* the full label only appears when you reach for it */
+.tick-label{
+  position:absolute;bottom:calc(100% + 14px);left:50%;transform:translateX(-50%);
+  background:var(--slab-2);border:1px solid var(--hair);
+  padding:5px 10px;border-radius:6px;font-size:12.5px;white-space:nowrap;
+  pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:6;
+  max-width:40vw;overflow:hidden;text-overflow:ellipsis;
+}
+.tick.note + .tick-label{bottom:auto;top:calc(100% + 14px)}
+.tick:hover + .tick-label{opacity:1}
+
+/* ---------------------------------------------------------- drawers */
+
+/* Driven by .open rather than [hidden] — like #lyricView/#reader, an
+   element whose visibility needs to transition can't also carry hidden,
+   since [hidden]{display:none!important} can't be animated past. visibility
+   (delayed on the way out) keeps it non-interactive while closed, same as
+   [hidden] did, without blocking the transition. */
+.scrim{
+  position:fixed;inset:0;background:rgba(6,9,12,.6);z-index:20;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .22s ease,visibility 0s .22s;
+}
+/* pointer-events isn't animatable, so this flips the instant .open is
+   removed — clicks reach whatever's underneath immediately, with no
+   dependency on the opacity/visibility transition timing above. */
+.scrim.open{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .22s ease}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(420px,86vw);z-index:21;
+  background:var(--slab);border-left:1px solid var(--hair);
+  display:flex;flex-direction:column;
+  transform:translateX(100%);visibility:hidden;pointer-events:none;
+  transition:transform .26s cubic-bezier(.22,1,.36,1),visibility 0s .26s;
+}
+.drawer.open{
+  transform:translateX(0);visibility:visible;pointer-events:auto;
+  transition:transform .26s cubic-bezier(.22,1,.36,1);
+}
+.drawer-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:20px 22px 14px;border-bottom:1px solid var(--hair);
+}
+.drawer-head h3{margin:0;font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--dust)}
+.x{font-size:14px;color:var(--dust);padding:4px 6px}
+.x:hover{color:var(--bone)}
+.x:active{color:var(--verdigris)}
+.drawer-body{flex:1;overflow-y:auto;padding:10px 12px 28px}
+
+.row{
+  display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;
+}
+.row:hover{background:var(--slab-2)}
+.row-t{font-family:var(--data);font-size:11px;color:var(--dust);flex:0 0 62px}
+.row-n{flex:1;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-n[contenteditable="true"]{white-space:normal;outline:none;border-bottom:1px solid var(--verdigris)}
+.row.mine .row-t{color:var(--oxide)}
+.row-go,.row-x{font-size:11px;color:var(--dust);opacity:1;padding:3px 6px}
+.row-go:hover,.row-x:hover{color:var(--bone)}
+.row-go:active,.row-x:active{color:var(--verdigris)}
+.row:active{background:var(--slab-2)}
+/* Sits above the title in library rows. Pushed down off the row's top edge
+   and tucked right up under the title so the two read as one block rather
+   than two loose lines. */
+.row-sub{font-family:var(--data);font-size:10.5px;color:var(--dust);margin:3px 0 1px}
+.row.stack{flex-direction:column;align-items:stretch;gap:2px;cursor:pointer}
+/* Title and the delete button share a line, so the row reads as a card with a
+   clean right edge instead of the trash dropping onto a line of its own. */
+.lib-head{display:flex;align-items:center;gap:10px;width:100%}
+.lib-head .row-n{flex:1;min-width:0}
+.lib-row .row-n{cursor:text;border-bottom:1px solid transparent;padding-bottom:1px}
+.lib-row .row-n:hover{border-bottom-color:var(--hair)}
+.lib-row .row-n[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none;white-space:normal}
+/* Boxed like the buttons underneath — moving the trash out of .lib-actions
+   left it behind, since that is where the border came from. Centred on the
+   title now that the duration line has moved above it, so the two share one
+   baseline instead of the taller box hanging below the text. */
+.lib-head .trash{
+  flex:0 0 auto;margin:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--hair);border-radius:6px;
+  /* same box as .lib-actions .row-go below, so the two line up as a set */
+  padding:0 9px;min-height:23px;
+  color:var(--dust);
+}
+.lib-head .trash:hover{border-color:var(--oxide);color:var(--oxide)}
+.lib-head .trash:active{border-color:var(--oxide);background:rgba(192,103,74,.18)}
+/* the arm-then-confirm state, which swaps the icon for "Sure?" */
+.lib-head .trash.danger{
+  border-color:var(--oxide);background:rgba(192,103,74,.18);color:var(--bone);
+}
+.lib-actions{display:flex;gap:6px;margin-top:4px;justify-content:flex-end}
+.lib-actions .row-go{
+  opacity:1;flex:0 0 auto;border:1px solid var(--hair);border-radius:6px;
+  padding:0 8px;min-height:23px;font-family:var(--ui);font-size:11px;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.lib-actions .row-go:hover{border-color:var(--verdigris);color:var(--bone)}
+.lib-actions .row-go:active{border-color:var(--verdigris);background:var(--slab-2);color:var(--bone)}
+.lib-actions .row-go.trash:active{border-color:var(--oxide);background:rgba(192,103,74,.18)}
+.lib-actions .row-go.trash{
+  padding:4px 9px;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.lib-actions .row-go.trash:hover{border-color:var(--oxide);color:var(--oxide)}
+.lib-actions .row-go.danger{
+  border-color:var(--oxide);background:rgba(192,103,74,.18);color:var(--bone);
+}
+.hint{padding:10px 12px 16px;font-size:12.5px;line-height:1.6;color:var(--dust)}
+/* Pinned to the foot of the panel rather than trailing the last book, so a
+   one-book library does not leave it floating in the middle. The flex column
+   is scoped to .lib — drawerBody is shared with Chapters and Notes, and
+   turning it into a flex container for all of them would shift their rows. */
+.drawer-body.lib{display:flex;flex-direction:column}
+.lib-foot{
+  margin:18px 12px 4px;padding-top:10px;border-top:1px solid var(--hair);
+  font-family:var(--data);font-size:10.5px;color:var(--dust);
+  margin-top:auto;          /* pushed to the bottom of the panel */
+  opacity:.5;               /* reference, not a feature */
+}
+.lib-foot{cursor:pointer}
+.lib-foot:hover{opacity:.85}
+/* ---------------------------------------------------------- library */
+
+.lib-find{display:block;padding:2px 10px 10px}
+.lib-find input{
+  width:100%;padding:8px 12px;border-radius:6px;
+  background:var(--ink-2);border:1px solid var(--hair);
+  color:var(--bone);font-size:13px;font-family:inherit;
+}
+.lib-find input::placeholder{color:var(--dust)}
+.lib-find input:focus{outline:none;border-color:var(--verdigris)}
+
+/* A series folds a run of books into one line. The header is a button rather
+   than a row so the whole strip is the hit target — these get collapsed and
+   expanded constantly and a small caret would be a poor thing to aim at. */
+.series{margin-bottom:2px}
+.series-head{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:9px 10px;border-radius:6px;color:var(--bone);
+}
+.series-head:hover{background:var(--slab-2)}
+.series-head:active{background:var(--slab-2)}
+.series-caret{color:var(--dust);font-size:10px;width:10px;flex:0 0 auto}
+.series-name{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.series-count{
+  flex:0 0 auto;font-family:var(--data);font-size:10.5px;color:var(--dust);
+}
+/* indented so the books read as belonging to the series above them */
+.series-books{padding-left:14px;border-left:1px solid var(--hair);margin-left:14px}
+
+.series-btn{color:var(--dust)}
+.series-btn:hover{border-color:var(--moss);color:var(--moss)}
+.series-btn.editing{
+  border-color:var(--verdigris);color:var(--bone);outline:none;
+  min-width:80px;text-align:left;
+}
+
+.hit-row{cursor:pointer}
+.hit-row .row-n{white-space:normal;font-family:var(--read);font-size:14px;line-height:1.5}
+.hit-row mark{background:rgba(95,211,196,.24);color:var(--bone);border-radius:4px}
+.row-check{flex:0 0 auto;width:15px;height:15px;accent-color:var(--verdigris)}
+.row-eye{
+  flex:0 0 auto;font-size:13px;padding:3px 4px;opacity:.85;
+  transition:opacity .12s ease;
+}
+.row-eye.off{opacity:.3}
+
+/* ---------------------------------------------------------- working */
+
+.working{
+  position:fixed;inset:0;z-index:30;background:var(--ink);
+  display:flex;align-items:center;justify-content:center;
+}
+.working-inner{width:min(520px,84vw);text-align:center}
+.working-stage{margin:0 0 18px;font-size:15px;letter-spacing:.02em}
+.working-bar{height:2px;background:var(--hair);border-radius:2px;overflow:hidden}
+.working-bar>div{height:100%;width:0;background:var(--verdigris);transition:width .4s ease}
+.working-pct{
+  margin:12px 0 0;font-family:var(--data);font-size:34px;color:var(--verdigris);
+  letter-spacing:-.02em;
+}
+.working-meta{
+  margin:8px 0 0;font-family:var(--data);font-size:11.5px;
+  letter-spacing:.06em;color:var(--dust);
+}
+.working-line{
+  margin:22px auto 0;max-width:52ch;min-height:3.4em;
+  font-family:var(--read);font-size:15px;line-height:1.7;color:var(--dust);
+}
+.working-note{margin:26px 0 0;font-size:12px;color:var(--dust)}
+
+/* ---------------------------------------------------------- update notice */
+
+/* Bottom-left, above the toast, and never over the transport. Deliberately
+   quiet: an update is worth mentioning once, not worth interrupting a book
+   for. Dismissing it lasts the session — it comes back next launch. */
+.update{
+  position:fixed;left:20px;bottom:20px;z-index:40;
+  display:flex;align-items:center;gap:14px;max-width:min(460px,80vw);
+  padding:12px 12px 12px 16px;border-radius:10px;
+  background:var(--slab-2);border:1px solid var(--hair);
+  box-shadow:0 10px 30px rgba(0,0,0,.45);
+}
+.update-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.update-text strong{font-size:13px;font-weight:600;color:var(--bone)}
+.update-text span{
+  font-size:11.5px;line-height:1.45;color:var(--dust);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+}
+.update .btn{flex:0 0 auto;padding:7px 14px;font-size:12.5px}
+.update .x{flex:0 0 auto;align-self:flex-start}
+@media (max-width:820px){
+  .update{left:12px;right:12px;bottom:12px;max-width:none}
+}
+
+/* ------------------------------------------------- back to the playhead */
+
+/* Sits centred just above the transport, out until the reader is scrolled
+   away from the word being spoken.
+   The "drop of water" is three things easing together, not one: it rises
+   from behind the bar, it overshoots very slightly before settling
+   (cubic-bezier with a y above 1), and its corners start almost circular and
+   relax into a squircle as it arrives — a blob resolving into a button. All
+   three are transform/opacity/radius, so none of it touches layout. */
+.jump{
+  position:fixed;left:50%;bottom:128px;z-index:35;
+  display:flex;align-items:center;gap:8px;
+  padding:9px 16px 9px 13px;
+  font-family:var(--ui);font-size:12.5px;font-weight:600;letter-spacing:.01em;
+  color:#0A1416;background:var(--verdigris);
+  border:0;border-radius:40% 40% 40% 40% / 50% 50% 50% 50%;
+  box-shadow:0 8px 22px rgba(0,0,0,.45), 0 0 0 1px rgba(95,211,196,.35);
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translate(-50%, 26px) scale(.72);
+  transition:
+    transform .42s cubic-bezier(.34,1.42,.5,1),
+    border-radius .42s cubic-bezier(.34,1.42,.5,1),
+    opacity .22s ease,
+    visibility 0s .42s;
+}
+.jump.show{
+  opacity:1;visibility:visible;pointer-events:auto;
+  transform:translate(-50%, 0) scale(1);
+  border-radius:16px;
+  transition:
+    transform .42s cubic-bezier(.34,1.42,.5,1),
+    border-radius .42s cubic-bezier(.34,1.42,.5,1),
+    opacity .18s ease;
+}
+.jump:active{transform:translate(-50%, 1px) scale(.97)}
+.jump svg{flex:0 0 auto}
+@media (prefers-reduced-motion:reduce){
+  .jump,.jump.show{transition:opacity .15s ease}
+}
+
+/* ------------------------------------------- chapter picker (press-hold)
+
+   Hold a finger still on the scrub track and this comes up over the page:
+   a reel of chapter numbers that slides under a fixed centre, with the
+   chosen one lit in verdigris. Drag left toward chapter one, right toward
+   the end. See the gesture in app.js.
+
+   Not interactive — the finger that opened it is still on the track — so
+   the whole thing is pointer-events:none and everything below can be shown
+   and hidden with a class. */
+.chapter-pick{
+  position:fixed;inset:0;z-index:36;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  pointer-events:none;
+  /* Only a soft pool of shade under the reel. The reading text is dimmed
+     directly (.app.picking below) rather than covered, because the whole
+     point of the picker is that the page behind it moves to the chapter you
+     land on — hide the page and there is nothing to land on. */
+  background:radial-gradient(ellipse 76% 40% at 50% 50%,
+    rgba(8,11,15,.74) 0%, rgba(8,11,15,.42) 48%, rgba(8,11,15,0) 100%);
+  opacity:0;visibility:hidden;
+  transition:opacity .16s ease, visibility 0s .16s;
+}
+.chapter-pick.show{opacity:1;visibility:visible;transition:opacity .16s ease}
+
+/* Text steps back while you spin, so the numbers own the screen and the
+   page reads as a preview of where you would end up. */
+.picking .reader{opacity:.3}
+.reader{transition:opacity .16s ease}
+/* The snap pill is about getting back afterwards; during the gesture it is
+   just something else lit up in the middle of the screen. Needs to outrank
+   .jump.show (0,2,0), hence the extra class rather than !important.
+   On <body>, not #app: the pill is a sibling of .app, not a child of it. */
+.picking .jump.show{opacity:0;visibility:hidden}
+
+/* Deliberately tall. overflow:hidden clips whatever paints outside the box,
+   and the lit number's glow reaches roughly 28px past its own cap height —
+   the same trap content-visibility set on .seg. At 27px scaled 1.8 that is
+   88px of glyph plus 56px of glow either side, so 184px leaves the
+   outermost layer room to fall off on its own. */
+.cp-window{
+  position:relative;width:100%;height:184px;overflow:hidden;
+  -webkit-mask-image:linear-gradient(90deg,
+    transparent 0%, #000 7%, #000 93%, transparent 100%);
+          mask-image:linear-gradient(90deg,
+    transparent 0%, #000 7%, #000 93%, transparent 100%);
+}
+.cp-reel{
+  position:absolute;left:50%;top:50%;display:flex;align-items:center;
+  transform:translate(-50%,-50%);
+  transition:transform .2s cubic-bezier(.22,.9,.3,1);
+  will-change:transform;
+}
+/* One detent. Fixed width, because that width *is* the spacing the finger
+   travels between chapters — app.js measures it rather than assuming it. */
+.cp-item{
+  flex:0 0 86px;text-align:center;
+  /* Heavy and large: these are read at arm's length, in motion, by someone
+     not looking closely. The UI face carries far more weight at size than
+     the mono one, which is drawn for 11px timecodes. */
+  font-family:var(--ui);font-weight:800;font-size:26px;letter-spacing:.01em;
+  line-height:1;
+  color:var(--dust);opacity:.28;
+  transition:color .2s ease, opacity .2s ease, font-size .2s ease;
+}
+/* Small, medium, big, medium, small. The rings are labelled in app.js
+   because CSS cannot express "two cells from the lit one"; the sizes live
+   here. Everything past the second ring keeps the base size and is mostly
+   eaten by the window's mask anyway.
+
+   Real font sizes rather than transform:scale. Scale is the cheaper
+   property and it is what the lyric view uses, but that view animates
+   thousands of lines; this one has a couple of dozen, so the reflow is
+   free — and text blown up 3x inside .cp-reel's composited layer rasterises
+   at the layer's resolution and goes soft, which at 88px is obvious.
+   The cell width is a fixed flex basis, so changing the size inside it
+   never moves a neighbour. */
+.cp-item.n2{opacity:.42;font-size:34px}
+.cp-item.n1{opacity:.62;font-size:46px}
+/* Grown with transform, not font-size: scaling a flex item leaves its
+   layout box alone, so the neighbours stay exactly one detent apart
+   instead of being shoved outward every time the selection moves. */
+.cp-item.on{
+  color:var(--verdigris);opacity:1;
+  font-size:88px;
+  text-shadow:0 0 6px rgba(95,211,196,.45),
+              0 0 16px rgba(95,211,196,.25),
+              0 0 28px rgba(95,211,196,.1);
+}
+.cp-name{
+  margin-top:20px;max-width:78vw;text-align:center;
+  font-family:var(--ui);font-size:13px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--bone);opacity:.42;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+@media (prefers-reduced-motion:reduce){
+  .cp-reel,.cp-item{transition:none}
+}
+
+.toast{
+  position:fixed;left:50%;bottom:88px;transform:translateX(-50%);z-index:40;
+  background:var(--slab-2);border:1px solid var(--hair);
+  padding:10px 16px;border-radius:8px;font-size:13px;
+}
+
+/* ---------------------------------------------------------- chapter suggestions */
+
+.suggest{
+  position:fixed;inset:0;z-index:31;background:rgba(6,9,12,.7);
+  display:flex;align-items:center;justify-content:center;
+}
+.suggest-inner{
+  width:min(480px,88vw);max-height:80vh;display:flex;flex-direction:column;
+  background:var(--slab);border:1px solid var(--hair);border-radius:10px;
+  padding:24px 24px 18px;
+}
+.suggest-inner h3{margin:0 0 8px;font-size:17px;font-weight:600}
+.suggest-list{flex:1;overflow-y:auto;margin:8px -8px 4px;padding:0 8px}
+.suggest-actions{
+  display:flex;justify-content:flex-end;gap:8px;
+  margin-top:14px;padding-top:14px;border-top:1px solid var(--hair);
+}
+
+/* ---------------------------------------------------------- note popover */
+
+.note-pop{
+  position:fixed;z-index:32;width:min(280px,80vw);
+  background:var(--slab-2);border:1px solid var(--hair);border-radius:10px;
+  padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+}
+.note-pop-text{
+  width:100%;min-height:64px;resize:vertical;
+  background:var(--ink-2);border:1px solid var(--hair);border-radius:6px;
+  color:var(--bone);font-family:inherit;font-size:13px;padding:8px;
+}
+.note-pop-text:focus{outline:none;border-color:var(--moss)}
+.note-pop-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}
+.note-pop-actions .x{font-size:11px;margin-right:auto}
+
+/* ---------------------------------------------------------- compact mode */
+
+/* The pop-out keeps the title (larger, it's the only heading here) and the
+   whole normal transport — same scrub track and swipe-up tray as the main
+   page. The way back out is a Close button at the *top*: floating it over
+   the arrow row covered the next-chapter button and read as a stray box. */
+.pop-exit{display:none}
+.app.compact .pop-exit{
+  display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;padding:7px 12px;
+}
+.app.compact .bar{
+  flex-direction:row;align-items:center;justify-content:space-between;
+  gap:12px;padding:12px 18px 10px;border-bottom:0;
+}
+.app.compact .bar-tools{display:none}
+.app.compact h1{font-size:17px;font-weight:600}
+.app.compact .bar-sub{font-size:10px;margin-top:2px}
+.app.compact .reader{display:none}
+.app.compact .lyric{display:block}
+.app.compact #btnPop{display:none}       /* Close at the top replaces it */
+.app.compact .tick-n{display:none}
+.app.compact .toast{bottom:104px}
+
+/* Unfolded, a Fold is wide enough to hit the desktop breakpoint. Type is
+   sized against the viewport rather than pinned, so the reading view grows
+   with the screen when the phone opens instead of staying phone-sized on a
+   tablet-width panel. */
+@media (min-width:821px){
+  /* one variable, not a font-size per state — see .lyric-line for why */
+  .app.compact .lyric-lines{--lyric-now:clamp(18px,3vw,34px)}
+  .app.compact .tp{min-width:34px;height:32px;font-size:11px}
+  .app.compact .tp.play{width:40px;font-size:12px}
+}
+
+@media (max-width:820px){
+  .bar{flex-direction:column;align-items:stretch;gap:12px;padding:20px 22px 16px}
+  /* Library rows carry up to four buttons; on a narrow drawer they'd
+     otherwise be squeezed to hairlines. Wrap them and give each a real
+     thumb-sized target. */
+  /* Centred rather than pushed right: in portrait the row wraps, and a
+     right-aligned wrapped row leaves a ragged gap on the left of the second
+     line. Centring keeps the spacing even however they fall. */
+  /* Wrapping again now that a series button makes four: forcing them onto
+     one line broke the labels over two rows each. flex:1 1 auto keeps them
+     sized to their text but still spread across whatever line they land on. */
+  /* align-content matters once the row wraps: the default stretches the
+     flex lines apart, so the gap between the two rows of buttons came out
+     wider than the gap between the buttons sitting side by side. Pinning it
+     to flex-start makes both gaps the one value. */
+  .lib-actions{
+    /* 6, not 8: .row.stack contributes its own 2px gap between children, so
+       margin-top:8 made the title-to-buttons gap 10 while the gap between the
+       wrapped button rows was 8. */
+    flex-wrap:wrap;row-gap:8px;column-gap:8px;margin-top:6px;
+    align-content:flex-start;
+  }
+  .lib-actions .row-go{flex:1 1 auto;min-width:0;padding:0 12px;min-height:34px;font-size:12.5px}
+  /* the trash lives in the title row, so the phone's taller button size has
+     to be repeated here or it ends up a stubbier box than the ones below it */
+  .lib-head .trash{min-height:34px;padding:0 13px}
+  .lib-actions .row-go.trash{padding:9px 14px}
+  /* find gets its own line, the buttons share the next one */
+  .bar-tools{flex-wrap:wrap}
+  .find{flex:1 0 100%}
+  .find input{width:100%}
+  .bar-tools .btn{flex:1 1 0;min-width:0;padding:8px 4px;text-align:center}
+  .page{font-size:18px;padding:6vh 22px 40vh}
+  /* Everything on one line overlapped itself at phone widths. Stack it:
+     grab handle, scrub track, then a roomy row of just the five transport
+     arrows. The rest lives behind a swipe up. */
+  .transport{flex-wrap:wrap;justify-content:center;gap:8px;padding:2px 14px 12px}
+  /* The headroom the chapter numbers need is already provided by the grab
+     handle's row here, unlike the desktop's single-line bar — so the generous
+     symmetric padding added for that would just make the tray tall. */
+  /* Bottom padding traded for space under the handle: the bar keeps the same
+     overall height, so the handle does not move, but everything below it
+     drops — which evens up the gap above the chapter numbers against the gap
+     under the play button. */
+  .transport.has-ticks,
+  .transport.has-ticks.two-rows{padding-top:0;padding-bottom:0}
+  .transport.expanded{padding-bottom:20px}
+  /* handle sits nearer the top edge of its strip */
+  .grab{height:16px}
+  .grab::before{top:2px}
+  /* Invisible, and deliberately taller than the handle it belongs to: the
+     visible grip stays a 16px strip, but the swipe is caught from well above
+     it. Extending the handle itself would put a fat bar across the page. */
+  .grab::after{content:"";position:absolute;left:0;right:0;top:-20px;height:52px}
+  .grab{
+    display:block;flex:1 0 100%;order:-3;height:22px;position:relative;
+    cursor:grab;touch-action:none;
+  }
+  .grab::before{
+    content:"";position:absolute;left:50%;top:6px;transform:translateX(-50%);
+    width:34px;height:3px;border-radius:2px;background:var(--hair);
+    transition:background .15s ease;
+  }
+  .transport.expanded .grab::before{background:var(--dust)}
+  .timeline{flex:1 0 100%;order:-2;margin-top:8px}
+  .tp-row.primary{
+    flex:1 0 100%;order:-1;justify-content:space-between;gap:0;
+    max-width:460px;margin:0 auto;padding-bottom:0;
+  }
+  /* the play button is wider than its neighbours, so without a nudge the
+     gap either side of it reads tighter than the rest of the row */
+  .tp-row.primary .tp.play{margin:0 12px}
+  /* max-height rather than display:none — display can't be transitioned,
+     and the tray snapping open looked broken */
+  /* height, not max-height: max-height has to overshoot the real content
+     height, so the easing curve runs out early and the tail of the motion
+     looks like it stalls. A known height animates edge to edge. */
+  .tp-row.more{
+    flex:1 0 100%;justify-content:space-between;gap:6px;
+    overflow:hidden;height:0;opacity:0;transform:translateY(6px);
+    padding-top:0;margin-top:2px;border-top:1px solid transparent;
+    will-change:height,transform;
+    transition:height .26s cubic-bezier(.22,1,.36,1),
+               padding-top .26s cubic-bezier(.22,1,.36,1),
+               transform .26s cubic-bezier(.22,1,.36,1),
+               opacity .16s ease;
+  }
+  .transport.expanded .tp-row.more{
+    height:58px;opacity:1;transform:none;padding-top:12px;
+    border-top-color:var(--hair);
+  }
+  .tp.wide{display:inline-flex;align-items:center}
+  /* thumb-sized targets */
+  .tp{min-width:56px;height:46px;font-size:14px}
+  .tp.play{width:68px;height:46px;font-size:18px}
+  #seek::-webkit-slider-thumb{width:14px;height:14px;border-radius:4.5px}
+  /* both track the thumb: half its width for the marks, half its width as
+     the inset for anything positioned along the track */
+  .ticks,.marks{left:7px;right:7px}
+  .mark{width:7px;height:7px;border-radius:2.5px}
+  /* only the tray gets surfaces — the transport arrows read fine as bare
+     glyphs flanking the play button, and boxing them made the row noisy */
+  .tp-row.more .tp{
+    background:var(--slab);border:1px solid var(--hair);border-radius:10px;
+    flex:1 1 0;min-width:0;height:44px;
+  }
+  .tp-row.more .tp:active{background:var(--slab-2);border-color:var(--dust)}
+  .tp-row.more .tp.wide{
+    padding:0 8px;flex:1.5 1 0;white-space:nowrap;font-size:14px;
+    display:inline-flex;align-items:center;justify-content:center;text-align:center;
+  }
+  /* folded/phone width — still viewport-relative so the folded and
+     unfolded panels don't jump between two unrelated type scales */
+  .app.compact .lyric-lines{--lyric-now:clamp(23px,7vw,30px)}
+  .app.compact .bar{padding:14px 22px 6px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;scroll-behavior:auto!important}
+}
+
+/* ------------------------------------------------ the web reader only
+   Everything below exists because this build has no folder of its own to
+   read from: a book has to be handed to it. */
+
+/* Drop anywhere. Shown only while a file is actually over the window —
+   a permanent drop zone would be a box taking up space for a thing you do
+   once per book. */
+.dropveil{
+  position:fixed;inset:0;z-index:60;display:flex;
+  align-items:center;justify-content:center;
+  background:rgba(8,11,15,.86);
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .14s ease, visibility 0s .14s;
+}
+.dropveil.on{opacity:1;visibility:visible;transition:opacity .14s ease}
+.dropveil > div{
+  padding:26px 40px;border-radius:14px;
+  border:2px dashed var(--verdigris);color:var(--bone);
+  font-family:var(--ui);font-size:17px;letter-spacing:.02em;
+}
+
+/* A button that reads as part of the sentence it sits in. */
+.linkish{
+  font:inherit;color:var(--verdigris);background:none;border:0;padding:0;
+  border-bottom:1px solid rgba(95,211,196,.45);cursor:pointer;
+}
+.linkish:hover{border-bottom-color:var(--verdigris)}
+
+.blank-note{
+  margin-top:18px;font-size:12.5px;color:var(--dust);max-width:44ch;
+}
+
+/* Keeping a copy on the device. Reads as off until it is on, because it
+   costs hundreds of megabytes and should never look like the default. */
+.keep-btn.on{color:var(--verdigris);border-color:rgba(95,211,196,.45)}
+.keep-btn:disabled{opacity:.7;cursor:default}

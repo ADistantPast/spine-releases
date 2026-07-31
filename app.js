@@ -1,0 +1,2124 @@
+const $ = id => document.getElementById(id);
+const audio = $("audio");
+
+const PAGE_SECONDS = 12 * 60;   // long chapters get split so the DOM stays light
+const SPEEDS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const SENTENCE_END = /[.!?]+["'”’)]?$/;
+
+let book = null;
+let pages = [];
+let curPage = -1;
+let segs = [];                  // book.segments, split at any mid-segment chapter mark
+let lyric = [];                 // segs re-cut into sentences, for the compact view
+let pw = { s: [], e: [], el: [] };     // words on the page now
+let nowIdx = -1;
+let liveSeg = null;
+let lastWordTop = -1;
+let follow = true;              // is the view tied to the playhead?
+let browseT = 0;                // the time the bar and the reader are on
+let autoScrollUntil = 0;
+let speedIdx = 2;
+let saveTimer = null;
+let compact = false;
+let lyricIdx = -1;
+let notePopMode = null;         // {kind:"new", s, e} | {kind:"edit", idx}
+let editingClock = false;       // the clock is a jump-to field while typing
+
+/* ------------------------------------------------------------ helpers */
+
+const clock = sec => {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+};
+const short = sec => {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}` : `0:${String(m).padStart(2, "0")}`;
+};
+const TRASH_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 6.5 H20 M9.5 6.5 V4.5 H14.5 V6.5" /><path d="M6.5 6.5 L7.5 20 H16.5 L17.5 6.5" /><path d="M10 10 V16.5 M14 10 V16.5" /></svg>';
+
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/* A tick you can feel. "tick" for one chapter crossed, "arm" when a
+   press-and-hold engages, anything else for a plain press.
+
+   The work happens natively — SpineNative.haptic() goes through the View,
+   so it respects the phone's own touch-feedback setting and needs no
+   VIBRATE permission (see MainActivity). navigator.vibrate() is not the
+   fallback: it does nothing without that permission, and where it does
+   work it is a raw motor buzz rather than a tick. A build of the app
+   without the bridge method simply gets no haptics, which is fine. */
+function haptic(kind) {
+  const n = window.SpineNative;
+  if (!n || !n.haptic) return;
+  try { n.haptic(kind); } catch (e) { /* older companion build */ }
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (t.hidden = true), 2600);
+}
+
+/* There is no server here. shelf.js answers the same calls out of the
+   book you opened and IndexedDB, which is what lets this be the phone's
+   reader rather than a second one written from scratch. */
+async function api(url, body) {
+  return SpineLocal.api(url, body);
+}
+
+/* ------------------------------------------------------------ opening */
+
+// the native side raises the file picker; see NativeBridge in MainActivity
+/* Opening a book is picking a file — see the open screen in index.html. */
+$("btnImport").onclick = () => $("filePick").click();
+
+async function loadBook(id, startAt = "last") {
+  const b = await api(`/api/book/${id}`);
+  if (b.error) return toast(b.error);
+  book = b;
+  book.chapters = book.chapters || [];
+  book.notes = book.notes || [];
+  hiddenChapters = new Set();
+  hiddenNotes = new Set();
+  closeDrawer();
+
+  $("title").textContent = b.title;
+  $("blank").hidden = true;
+  $("transport").hidden = false;
+  positionJump();
+  audio.src = SpineLocal.audioUrl(id);
+  audio.playbackRate = SPEEDS[speedIdx];
+  $("clockEnd").textContent = clock(b.duration);
+  $("seek").max = Math.max(1, Math.floor(b.duration));
+
+  buildPages();
+  drawTicks();
+  updateSubtitle();
+
+  const t = startAt === "start" ? 0
+    : startAt === "bookmark" && b.bookmark != null ? b.bookmark
+    : (b.position || 0);
+  renderBook(t);
+  lyricIdx = -1;
+  if (compact) renderLyric(t);
+  audio.currentTime = t;
+  browseT = t;
+  lastMarkPct = -1;   // a new book means a new duration behind the same %
+  updateTimeline(t);
+  playUi();
+  updateBookmarkUi();
+  positionScrollRail();
+  setSleep(0);          // a timer set for the last book shouldn't stop this one
+  mediaChapter = -1;    // force the lock screen onto the new book
+  pushMediaState();
+
+  /* The words survive in the browser's storage; hundreds of megabytes of
+     audio do not, and no browser promises to keep them. So a book can be
+     here and silent, and the fix is to hand its file back rather than to
+     start again. */
+  if (b.missing) {
+    toast("This book needs its audio — choose the file to carry on.");
+    setTimeout(() => SpineNeedsAudio(b.id), 900);
+  }
+}
+
+function updateSubtitle() {
+  const n = book.chapters.length;
+  $("subtitle").textContent =
+    `${clock(book.duration)} · ${n} chapter${n === 1 ? "" : "s"}` +
+    (book.language ? ` · ${book.language}` : "");
+}
+
+/* ------------------------------------------------------------ paging */
+
+function splitSegmentsAtChapters(segments, chapters) {
+  let out = segments;
+  for (const c of chapters) {
+    const t = c.t;
+    const i = out.findIndex(s => s.s < t && t < s.e);
+    if (i < 0) continue;
+    const seg = out[i];
+    const words = seg.w && seg.w.length ? seg.w : [{ s: seg.s, e: seg.e, w: seg.t }];
+    const splitAt = words.findIndex(w => w.s >= t);
+    if (splitAt <= 0) continue;      // the mark already lands at the segment start
+    const mk = ws => ({
+      s: ws[0].s, e: ws[ws.length - 1].e,
+      t: ws.map(w => w.w).join("").trim(),
+      w: ws,
+    });
+    out = [...out.slice(0, i), mk(words.slice(0, splitAt)), mk(words.slice(splitAt)),
+           ...out.slice(i + 1)];
+  }
+  return out;
+}
+
+/* Whisper's segments are pause-shaped, not sentence-shaped — some run to a
+   whole paragraph. The compact view wants one real sentence at a time, so
+   re-cut on end punctuation using the word timings. (Same idea as
+   _sentences() in app.py, which does this for chapter detection.) */
+function buildLyricLines() {
+  lyric = [];
+  lyricEls = null;          // sentences changed; the laid-out DOM is stale
+  let buf = [];
+  const flush = () => {
+    if (!buf.length) return;
+    lyric.push({
+      s: buf[0].s, e: buf[buf.length - 1].e,
+      t: buf.map(w => w.w).join("").trim(),
+      w: buf.slice(),           // kept so the reading view can light each word
+    });
+    buf = [];
+  };
+  for (const seg of segs) {
+    const words = seg.w && seg.w.length ? seg.w : [{ s: seg.s, e: seg.e, w: seg.t }];
+    for (const w of words) {
+      buf.push(w);
+      if (SENTENCE_END.test(w.w.trim())) flush();
+    }
+  }
+  flush();
+}
+
+function buildPages() {
+  segs = splitSegmentsAtChapters(book.segments, book.chapters);
+  let bounds = book.chapters.map(c => c.t);
+  if (!bounds.length || bounds[0] > 0.5) bounds.unshift(0);
+
+  const starts = bounds.map(t => {
+    const i = segs.findIndex(s => s.e > t);
+    return i < 0 ? segs.length - 1 : i;
+  });
+
+  pages = [];
+  for (let k = 0; k < starts.length; k++) {
+    const from = starts[k];
+    const to = k + 1 < starts.length ? starts[k + 1] - 1 : segs.length - 1;
+    if (to < from) continue;
+    let a = from;
+    while (a <= to) {
+      let b = a;
+      while (b < to && segs[b + 1].e - segs[a].s < PAGE_SECONDS) b++;
+      pages.push({
+        from: a, to: b, chapter: k, opens: a === from,
+        s: segs[a].s, e: segs[b].e
+      });
+      a = b + 1;
+    }
+  }
+  buildLyricLines();
+}
+
+const pageAt = t => {
+  for (let i = 0; i < pages.length; i++) if (t < pages[i].e) return i;
+  return Math.max(0, pages.length - 1);
+};
+
+const posAt = (list, t) => {
+  let lo = 0, hi = list.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].s <= t) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+};
+
+/* The words the narrator actually said to announce a chapter — "Chapter
+   Eleven", "Prologue" — get set in gold at the head of their page. Same
+   vocabulary the detector in app.py works from, so what's gilded is exactly
+   what was matched on. A hand-placed mark lands mid-sentence with no such
+   words, matches nothing, and is left alone. */
+const HEAD_KEYWORD = /^(chapter|part|book|section|episode)$/i;
+const HEAD_STANDALONE =
+  /^(prologue|epilogue|introduction|foreword|afterword|preface|interlude|conclusion|dedication|acknowledgments?|credits|bloopers|outro|extras)$/i;
+const NUM_WORDS = new Set(("one two three four five six seven eight nine ten eleven twelve " +
+  "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty " +
+  "sixty seventy eighty ninety first second third fourth fifth sixth seventh eighth ninth " +
+  "tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth " +
+  "nineteenth twentieth thirtieth fortieth fiftieth").split(" "));
+
+const bare = s => (s || "").replace(/[^\w'’-]/g, "");
+const isNumberWord = w =>
+  !!w && (/^\d{1,3}$/.test(w) || /^[ivxlc]{1,7}$/i.test(w) || NUM_WORDS.has(w.toLowerCase()));
+
+function headingLength(flat, i) {
+  const first = bare(flat[i] && flat[i].w);
+  if (!first) return 0;
+  if (HEAD_STANDALONE.test(first)) return 1;
+  if (!HEAD_KEYWORD.test(first)) return 0;
+  let n = 1;
+  for (let k = 0; k < 2; k++) {          // "Chapter twenty one"
+    if (!isNumberWord(bare(flat[i + n] && flat[i + n].w))) break;
+    n++;
+  }
+  return n;
+}
+
+/* Renders the entire book in one pass so the reader scrolls freely end to
+   end. Timings are logged because "is 79k word elements too many?" is a
+   measurable question, not a matter of opinion. */
+function renderBook(jumpTo) {
+  const t0 = performance.now();
+
+  // which segment does each chapter open on
+  const opensAt = new Map();
+  for (const c of book.chapters) {
+    const i = segs.findIndex(s => s.e > c.t);
+    if (i >= 0 && !opensAt.has(i)) opensAt.set(i, c);
+  }
+
+  // one flat pass over every word: note runs need to see their neighbours
+  const flat = [];
+  const segStart = [];
+  for (let si = 0; si < segs.length; si++) {
+    const seg = segs[si];
+    const words = seg.w && seg.w.length ? seg.w : [{ s: seg.s, e: seg.e, w: seg.t }];
+    segStart.push(flat.length);
+    for (const w of words) {
+      flat.push({ ...w, noteK: book.notes.findIndex(n => w.s < n.e && w.e > n.s) });
+    }
+  }
+  flat.forEach((w, idx) => {
+    if (w.noteK < 0) return;
+    w.noteStart = !(idx > 0 && flat[idx - 1].noteK === w.noteK);
+    w.noteEnd = !(idx < flat.length - 1 && flat[idx + 1].noteK === w.noteK);
+  });
+  // gild the spoken announcement at the head of each chapter
+  for (const si of opensAt.keys()) {
+    const at = segStart[si];
+    const len = headingLength(flat, at);
+    for (let k = 0; k < len; k++) {
+      flat[at + k].head = true;
+      flat[at + k].headEnd = k === len - 1;
+    }
+  }
+
+  const out = [];
+  let fi = 0;
+  for (let si = 0; si < segs.length; si++) {
+    const chapter = opensAt.get(si);
+    if (chapter) out.push(`<p class="chapter-rule" id="ch-${si}">${esc(chapter.name)}</p>`);
+    const seg = segs[si];
+    const wordCount = (seg.w && seg.w.length) ? seg.w.length : 1;
+    const spans = [];
+    for (let n = 0; n < wordCount; n++) {
+      const w = flat[fi++];
+      let cls = "w";
+      let na = "";
+      let text = w.w;
+      if (w.noteK >= 0) {
+        cls += " noted" + (w.noteStart ? " noted-start" : "") + (w.noteEnd ? " noted-end" : "");
+        na = ` data-note="${w.noteK}"`;
+      }
+      if (w.head) {
+        cls += " head" + (w.headEnd ? " head-end" : "");
+        if (w.headEnd) text = text.replace(/[.,;:]+\s*$/, "");
+      }
+      spans.push(`<span class="${cls}" data-s="${w.s}" data-e="${w.e}"${na}>${esc(text)}</span>`);
+    }
+    out.push(`<p class="seg" data-i="${si}">${spans.join("")}</p>`);
+  }
+
+  const built = performance.now();
+  const page = $("page");
+  page.innerHTML = out.join("");
+  const painted = performance.now();
+
+  pw = { s: [], e: [], el: [] };
+  page.querySelectorAll(".w").forEach(el => {
+    pw.s.push(parseFloat(el.dataset.s));
+    pw.e.push(parseFloat(el.dataset.e));
+    pw.el.push(el);
+  });
+  nowIdx = -1; liveSeg = null; lastWordTop = -1;
+
+  const done = performance.now();
+  console.log(`[spine] ${pw.el.length} words | build ${Math.round(built - t0)}ms `
+    + `| innerHTML ${Math.round(painted - built)}ms | index ${Math.round(done - painted)}ms `
+    + `| total ${Math.round(done - t0)}ms`);
+
+  if (jumpTo !== undefined) scrollToTime(jumpTo, "instant");
+}
+
+/* Put the moment at `t` near the top of the reader without re-rendering. */
+function scrollToTime(t, behavior) {
+  const i = wordAt(t);
+  const el = pw.el[Math.max(0, i)];
+  if (!el) return;
+  const reader = $("reader");
+  autoScrollUntil = performance.now() + 900;
+  reader.scrollTo({
+    top: reader.scrollTop + el.getBoundingClientRect().top
+         - reader.getBoundingClientRect().top - reader.clientHeight * 0.32,
+    behavior: behavior || "instant",
+  });
+}
+
+/* ------------------------------------------------------------ the loop */
+
+function wordAt(t) {
+  let lo = 0, hi = pw.s.length - 1, best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pw.s[mid] <= t) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
+function setNow(i) {
+  if (nowIdx >= 0 && pw.el[nowIdx]) pw.el[nowIdx].classList.remove("now");
+
+  if (i > nowIdx) for (let j = nowIdx + 1; j <= i; j++) pw.el[j]?.classList.add("read");
+  else for (let j = i + 1; j <= nowIdx; j++) pw.el[j]?.classList.remove("read");
+
+  nowIdx = i;
+  const el = pw.el[i];
+  if (!el) return;
+  el.classList.add("now");
+
+  const seg = el.parentElement;
+  if (seg !== liveSeg) {
+    liveSeg?.classList.remove("live");
+    seg.classList.add("live");
+    liveSeg = seg;
+  }
+
+  if (!follow) return;
+  const reader = $("reader");
+  const r = el.getBoundingClientRect(), rr = reader.getBoundingClientRect();
+  if (Math.abs(r.top - lastWordTop) < 4) return;   // same line, no scroll
+  lastWordTop = r.top;
+  const delta = r.top - (rr.top + rr.height * 0.40);
+  if (Math.abs(delta) > 8) {
+    autoScrollUntil = performance.now() + 800;     // so we don't read our own
+    // smooth is for line-to-line drift; catching up across screens that way
+    // animates the entire distance and feels like it is crawling
+    const far = Math.abs(delta) > reader.clientHeight * 1.2;
+    reader.scrollBy({ top: delta, behavior: far ? "instant" : "smooth" });
+  }
+}
+
+// the words of the sentence currently being read, so the playhead word can
+// be lit without rebuilding the whole line list every frame
+let lyricWordEls = [];
+let lyricWordIdx = -1;
+
+let lyricEls = null;
+
+/* Sentences are laid out once and advancing only moves classes and the
+   scroll offset. Re-rendering a window of lines on every sentence — what
+   this replaced — cannot be made smooth: replacing innerHTML destroys the
+   old elements and builds new ones already at their final size and opacity,
+   so the CSS transitions have no previous value to animate from, and every
+   line's text jumps up a position at once.
+
+   Only a window is left *in layout* though. Measured on the real book
+   (7,481 sentences) advancing sentence by sentence: every line laid out gave
+   29.1 ms average and 64 frames over 20 ms; windowed gave 8.3 ms and zero,
+   identical to idle. The cost is the element count, not which property
+   animates — swapping the font-size transition for a composited
+   transform:scale changed nothing, since a growing line still reflows a
+   container with thousands of children. ±40 means re-windowing lands roughly
+   every 20 sentences, minutes apart at reading pace. */
+const LYRIC_WIN = 40;     // lines kept in layout either side of the current one
+const LYRIC_DRIFT = 20;   // how close to the edge we get before re-windowing
+let lyricWin = null;
+
+function windowLyric(idx) {
+  const lo = Math.max(0, idx - LYRIC_WIN);
+  const hi = Math.min(lyric.length - 1, idx + LYRIC_WIN);
+  if (lyricWin) {
+    // Only touch the difference. Both passes test against the *other* range
+    // rather than assuming the windows overlap: after a seek they can be
+    // disjoint, and an earlier version's ranges then overlapped so the show
+    // pass re-revealed what the hide pass had just hidden, growing the
+    // window to 500+ lines instead of recentring it.
+    for (let i = lyricWin.lo; i <= lyricWin.hi; i++)
+      if (i < lo || i > hi) lyricEls[i].style.display = "none";
+    for (let i = lo; i <= hi; i++)
+      if (i < lyricWin.lo || i > lyricWin.hi) lyricEls[i].style.display = "";
+  } else {
+    for (let i = 0; i < lyricEls.length; i++)
+      lyricEls[i].style.display = (i >= lo && i <= hi) ? "" : "none";
+  }
+  lyricWin = { lo, hi };
+}
+
+function buildLyricDom() {
+  const box = $("lyricLines");
+  box.innerHTML = lyric.map((l, i) =>
+    `<p class="lyric-line" data-i="${i}" data-s="${l.s}">${esc(l.t)}</p>`).join("");
+  lyricEls = [...box.children];
+  lyricWin = null;
+  lyricIdx = -1;
+  lyricWordEls = [];
+  lyricWordIdx = -1;
+}
+
+function renderLyric(t) {
+  if (!lyric.length) return;
+  if (!lyricEls || lyricEls.length !== lyric.length) buildLyricDom();
+
+  const idx = posAt(lyric, t);
+  if (idx !== lyricIdx) {
+    if (!lyricWin || idx - lyricWin.lo < LYRIC_DRIFT || lyricWin.hi - idx < LYRIC_DRIFT)
+      windowLyric(idx);
+    if (lyricIdx >= 0) {
+      lyricEls[lyricIdx - 1]?.classList.remove("near");
+      lyricEls[lyricIdx + 1]?.classList.remove("near");
+      const prev = lyricEls[lyricIdx];
+      if (prev) {
+        prev.classList.remove("now");
+        prev.textContent = lyric[lyricIdx].t;   // drop its word spans again
+      }
+    }
+    lyricEls[idx - 1]?.classList.add("near");
+    lyricEls[idx + 1]?.classList.add("near");
+
+    const el = lyricEls[idx];
+    if (el) {
+      el.classList.add("now");
+      // only the sentence being read is split into words — the faded
+      // neighbours never light up, so spans there would be dead weight
+      if (lyric[idx].w)
+        el.innerHTML = lyric[idx].w.map(w =>
+          `<span class="lw" data-s="${w.s}" data-e="${w.e}">${esc(w.w)}</span>`).join("");
+      lyricWordEls = [...el.querySelectorAll(".lw")];
+    } else {
+      lyricWordEls = [];
+    }
+    lyricWordIdx = -1;
+    lyricIdx = idx;
+    centreLyric("smooth");
+  }
+  setLyricWord(t);
+}
+
+function setLyricWord(t) {
+  if (!lyricWordEls.length) return;
+  let lo = 0, hi = lyricWordEls.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (parseFloat(lyricWordEls[mid].dataset.s) <= t) { found = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (found === lyricWordIdx) return;
+  lyricWordEls[lyricWordIdx]?.classList.remove("now");
+  lyricWordEls[found]?.classList.add("now");
+  lyricWordIdx = found;
+}
+
+$("lyricView").onclick = e => {
+  const line = e.target.closest(".lyric-line");
+  if (!line || line.dataset.s === undefined) return;
+  playFrom(parseFloat(line.dataset.s));
+};
+
+/* scrollIntoView doesn't reliably drive an overflow:hidden container, so
+   work the offset out and scroll the box directly */
+function centreLyric(behavior) {
+  const box = $("lyricView");
+  const el = $("lyricLines").querySelector(".now");
+  if (!el) return;
+  const top = el.offsetTop - (box.clientHeight - el.offsetHeight) / 2;
+  // Sentence to sentence is a short, smooth drift. A seek is not: it can be
+  // thousands of pixels, and animating the whole distance left the line
+  // visibly off-centre for a second or more (measured 506px out half a
+  // second after a jump, only settling by ~2s). Same rule setNow() uses in
+  // the reader — smooth for the drift, instant once it's more than a screen.
+  const far = Math.abs(top - box.scrollTop) > box.clientHeight * 1.2;
+  box.scrollTo({ top, behavior: far ? "instant" : (behavior || "instant") });
+}
+
+// the pop-out resizes the window underneath us, and the scroll offset that
+// centred the line at the old size is meaningless at the new one
+window.addEventListener("resize", () => {
+  if (compact) centreLyric();
+  positionScrollRail();
+  // whether the chapter numbers fit on one row is purely a question of
+  // width, so it has to be re-asked whenever the window changes — on a
+  // Fold that is every time the phone is opened or closed
+  if (book) fitTickLabels();
+});
+
+/* ------------------------------------------------------- scroll rail */
+// The native scrollbar is only 16px, too thin to keep a finger on while
+// dragging. This is a wider invisible strip laid over its edge; pointer
+// capture keeps tracking the drag even once the finger wanders back toward
+// the centre of the screen, which a bare native scrollbar won't do.
+const scrollRail = $("scrollRail");
+let railDragging = false, railStartY = 0, railStartScroll = 0;
+
+function positionScrollRail() {
+  if (compact || !book) { scrollRail.style.display = "none"; return; }
+  const r = $("reader").getBoundingClientRect();
+  scrollRail.style.display = "block";
+  scrollRail.style.top = `${r.top}px`;
+  scrollRail.style.height = `${r.height}px`;
+}
+
+scrollRail.addEventListener("pointerdown", e => {
+  const reader = $("reader");
+  const max = reader.scrollHeight - reader.clientHeight;
+  if (max <= 0) return;
+  railDragging = true;
+  scrollRail.setPointerCapture(e.pointerId);
+  railStartY = e.clientY;
+  railStartScroll = reader.scrollTop;
+  e.preventDefault();
+});
+scrollRail.addEventListener("pointermove", e => {
+  if (!railDragging) return;
+  const reader = $("reader");
+  const max = reader.scrollHeight - reader.clientHeight;
+  const rect = scrollRail.getBoundingClientRect();
+  const scale = max / (rect.height || 1);
+  const top = Math.max(0, Math.min(max, railStartScroll + (e.clientY - railStartY) * scale));
+  // scrollTo(behavior:"instant"), never `scrollTop = ...`: .reader carries
+  // scroll-behavior:smooth, which a plain scrollTop assignment inherits. Each
+  // move then queued its own eased animation, so the page crawled along
+  // behind the finger and only landed on the target after letting go — it
+  // read as "the drag does nothing until I release". "instant" is also the
+  // only value that overrides the stylesheet here; "auto" defers to it.
+  reader.scrollTo({ top, behavior: "instant" });
+  e.preventDefault();
+});
+const endRailDrag = () => { railDragging = false; };
+scrollRail.addEventListener("pointerup", endRailDrag);
+scrollRail.addEventListener("pointercancel", endRailDrag);
+
+function frame() {
+  if (book && !audio.paused) {
+    const t = audio.currentTime;
+    // Driven by the playhead, never by the browse position: the lit chapter
+    // number answers "where does this carry on from", not "what am I
+    // looking at".
+    updateTimeline(t);
+    playUi();
+    // The bar tracks the playhead only while following. Once you have
+    // scrubbed or scrolled away it is yours until you snap back, or
+    // playback would drag the thumb out from under your thumb.
+    if (follow && !cpOpen) {
+      browseT = t;
+      $("seek").value = Math.floor(t);
+    }
+    if (compact) {
+      renderLyric(t);
+    } else {
+      const i = wordAt(t);
+      if (i !== nowIdx) setNow(i);
+    }
+    checkSleep();
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ------------------------------------------------------------ timeline */
+
+const chapterAt = t => {
+  let ci = 0;
+  book.chapters.forEach((c, k) => { if (c.t <= t + 0.01) ci = k; });
+  return ci;
+};
+
+const tickLabel = name => {
+  const m = /^chapter\s+(\d+)/i.exec(name);
+  return m ? m[1] : name.slice(0, 2).toUpperCase();
+};
+
+// individually hidden marks, kept by timestamp (stable across re-sorts) —
+// a per-book, session-only declutter, not saved.
+let hiddenChapters = new Set();
+let hiddenNotes = new Set();
+
+function drawTicks() {
+  const box = $("ticks");
+
+  // Only the marks that actually get a tick, so the every-other-one
+  // stagger below counts what's on screen rather than what's in the list —
+  // "Start"/"End" and anything hidden would otherwise throw the alternation
+  // out of step and put two labels side by side at the same height.
+  const shown = book.chapters.filter(c =>
+    !/^(start|end)$/i.test(c.name) && !hiddenChapters.has(c.t));
+
+  const chapterHtml = shown.map((c, i) => {
+    const pct = book.duration ? c.t / book.duration * 100 : 0;
+    return `<div class="tick${i % 2 ? " alt" : ""}" style="left:${pct}%" data-seek="${c.t}">
+              <span class="tick-n">${tickLabel(c.name)}</span></div>
+            <div class="tick-label">${esc(c.name)}</div>`;
+  }).join("");
+
+  const noteHtml = book.notes.map((n, k) => {
+    if (hiddenNotes.has(n.s)) return "";
+    const pct = book.duration ? n.s / book.duration * 100 : 0;
+    return `<div class="tick note" style="left:${pct}%" data-seek="${n.s}" data-note-k="${k}"></div>
+            <div class="tick-label">${esc(n.text)}</div>`;
+  }).join("");
+
+  box.innerHTML = chapterHtml + noteHtml;
+  fitTickLabels();
+  fitTickLabelsSoon();
+  /* Clicking a mark takes the page to it. Browse, not seek: the timeline is
+     the instrument for looking around, and jumping to a chapter to see what
+     is in it should not cost you the place you were listening from. Tap a
+     word once you are there to actually play from it. */
+  box.querySelectorAll(".tick").forEach(el => el.onclick = () => {
+    stopFollowing();
+    browseTo(parseFloat(el.dataset.seek), "instant");
+    if (el.dataset.noteK !== undefined)
+      openNotePop({ kind: "edit", idx: +el.dataset.noteK }, el.getBoundingClientRect());
+  });
+}
+
+/* Do any two numbers on the same row actually touch? Grouped by row so a
+   staggered layout is judged one row at a time. */
+function labelsCollide(pad) {
+  const rows = new Map();
+  for (const el of $("ticks").querySelectorAll(".tick:not(.note) .tick-n")) {
+    const r = el.getBoundingClientRect();
+    if (!r.width) continue;
+    const key = Math.round(r.top);
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push(r);
+  }
+  for (const list of rows.values()) {
+    list.sort((a, b) => a.left - b.left);
+    for (let i = 1; i < list.length; i++)
+      if (list[i].left < list[i - 1].right + pad) return true;
+  }
+  return false;
+}
+
+/* Measure, don't guess. The first version compared track width against a
+   chapter count with a hand-picked threshold, which staggered a desktop bar
+   that had plenty of room — the numbers only need about 14px each, not the
+   38px that was assumed. Label width depends on the font, the window and
+   whether the labels are "7" or "PR", so the only honest test is to lay them
+   out flat and look. Escalate a step at a time: flat, then every other one
+   dropped to a second row, then hide the chapter marks entirely. */
+
+/* 6px, not a hairline: two numbers that merely fail to overlap still read as
+   one smudged number. Real chapters are not evenly spaced — they bunch — so
+   this has to hold for the tightest pair on the bar, not the average. */
+const TICK_GAP = 6;
+
+function fitTickLabels() {
+  const tl = $("timeline");
+  tl.classList.remove("stagger", "dense");
+  if (labelsCollide(TICK_GAP)) {
+    tl.classList.add("stagger");
+    if (labelsCollide(TICK_GAP)) tl.classList.add("dense");
+  }
+  // The chapter numbers are absolutely positioned above the track, so they
+  // add no height of their own — the transport has to make room for them or
+  // they end up flush against the reader's last line (measured: the topmost
+  // label sat on exactly the same pixel as the transport's top edge). CSS
+  // can't look upwards from .timeline, so mirror the state onto the bar.
+  const tp = $("transport");
+  tp.classList.toggle("has-ticks", !tl.classList.contains("dense"));
+  tp.classList.toggle("two-rows", tl.classList.contains("stagger"));
+}
+
+/* Measuring straight after innerHTML can read a pre-font layout: the tick
+   labels are set in a system mono that may resolve a frame late, so the first
+   measurement can use the fallback's narrower metrics and conclude everything
+   fits — then the real face arrives and the numbers overlap. Re-check on the
+   next frame and again once fonts report ready. */
+function fitTickLabelsSoon() {
+  requestAnimationFrame(() => { if (book) fitTickLabels(); });
+  if (document.fonts && document.fonts.ready)
+    document.fonts.ready.then(() => { if (book) fitTickLabels(); });
+}
+
+let mediaChapter = -1;
+
+function updateTimeline(t) {
+  const ci = chapterAt(t);
+  const cur = book.chapters[ci];
+  document.querySelectorAll(".tick:not(.note)").forEach(el =>
+    el.classList.toggle("on", !!cur && Math.abs(parseFloat(el.dataset.seek) - cur.t) < 0.01));
+  // the lock screen shows the chapter, so it has to follow along — but only
+  // on an actual change, not sixty times a second
+  if (ci !== mediaChapter) {
+    mediaChapter = ci;
+    pushMediaState();
+  }
+}
+
+/* --------------------------------------------- chapter picker (press-hold)
+
+   Chapter ticks on a phone are a few pixels wide, and a busy book hides them
+   altogether (.dense). So: hold a finger still on the scrub track and a reel
+   of chapter numbers comes up over the page — drag left toward chapter one,
+   right toward the end, lift to go there, with a tick under the thumb at
+   every chapter. It is a way to move through a book without looking at it.
+
+   Two things this has to share with the native range input underneath:
+
+   - Before the hold arms, the slider stays live. A hold is not the only
+     thing a finger on the track might mean, and a small deliberate scrub
+     has to keep scrubbing while the timer runs.
+   - Once it arms, the slider must stop dead, or two things fight over the
+     same finger. Touch gives the element that got pointerdown an implicit
+     pointer capture, so taking capture here is what ends the browser's own
+     drag of the thumb; pointer-events:none on top of that is belt and
+     braces. Listening on #track rather than #seek is what makes that
+     possible — the events still reach us after the slider goes deaf. */
+
+const CP_HOLD_MS = 1000;   // a deliberate hold, but not a wait
+const CP_SLOP = 12;        // px of drift allowed before it counts as a scrub
+const CP_EDGE = 44;        // hold this near a screen edge and it keeps stepping
+const CP_EDGE_MS = 340;    // first step: slow enough to stop on the one you want
+const CP_EDGE_MIN_MS = 130;// ...winding up to this if you keep holding
+const CP_EDGE_STEP = 35;   // taken off the wait each time
+
+let cpOpen = false;
+let cpPending = false;     // finger down, hold timer running, not armed yet
+let cpPrevBrowse = 0;      // where we were looking before the reel opened
+let cpIdx = 0;             // chapter under the centre of the reel
+let cpBase = 0;            // chapter the finger started from
+let cpOriginX = 0, cpOriginY = 0;
+let cpStep = 48;           // px of travel per chapter
+let cpPointer = null;
+let cpArmTimer = null, cpEdgeTimer = null, cpEdgeDir = 0;
+
+/* Two letters for anything that isn't a numbered chapter — the same rule the
+   timeline ticks use, so "PR" means Prologue in both places. Three would
+   overflow the cell now that the lit one is drawn at 59px. The full name is
+   spelled out under the reel regardless. */
+const cpLabel = name => tickLabel(name);
+
+function cpCancelArm() { clearTimeout(cpArmTimer); cpArmTimer = null; cpPending = false; }
+
+function openChapterPick() {
+  // one chapter is not something you can spin through
+  if (!book || book.chapters.length < 2) return;
+  cpOpen = true;
+  cpPending = false;
+  cpPrevBrowse = browseT;
+  cpStopEdge();
+  // Start from the chapter you are looking at, not the one playing — if you
+  // have already browsed elsewhere, spinning should carry on from there.
+  cpIdx = cpBase = chapterAt(browseT);
+  stopFollowing();
+  document.body.classList.add("picking");
+
+  try { $("track").setPointerCapture(cpPointer); } catch (e) { /* gone already */ }
+  $("seek").style.pointerEvents = "none";
+
+  const reel = $("cpReel");
+  reel.innerHTML = book.chapters
+    .map(c => `<div class="cp-item">${esc(cpLabel(c.name))}</div>`).join("");
+
+  /* Cover the whole book in about one thumb-throw where that's comfortable,
+     but never let a detent get so tight that tremor trips it, nor so wide
+     that a short book needs a swipe across the screen for one chapter. */
+  const usable = Math.max(120, window.innerWidth - 48);
+  cpStep = Math.min(64, Math.max(24, usable / (book.chapters.length - 1)));
+
+  // Place the reel with transitions off, or it slides in from wherever it
+  // was left last time instead of simply being there.
+  reel.style.transition = "none";
+  renderChapterPick();
+  void reel.offsetHeight;              // flush, so the next move animates
+  reel.style.transition = "";
+
+  $("chapterPick").classList.add("show");
+  haptic("arm");
+}
+
+function renderChapterPick() {
+  const reel = $("cpReel"), items = reel.children;
+  if (!items.length) return;
+  /* Sizes step down from the middle — small, medium, big, medium, small.
+     CSS cannot say "two cells from the lit one", so the rings are labelled
+     here and the sizes live in the stylesheet. Only five elements change
+     class per detent, whatever the book's length. */
+  for (const el of items) el.classList.remove("on", "n1", "n2");
+  items[cpIdx].classList.add("on");
+  for (const d of [-2, -1, 1, 2]) {
+    items[cpIdx + d]?.classList.add(Math.abs(d) === 1 ? "n1" : "n2");
+  }
+  // The reel is centred on the screen, so shifting it by how far the chosen
+  // cell sits from the reel's own middle puts that cell under the centre.
+  // Measured, not assumed: the cell width is set in CSS and is the same
+  // number as the finger travel per detent.
+  const w = items[0].offsetWidth || 74;
+  const off = (items.length / 2 - cpIdx - 0.5) * w;
+  reel.style.transform = `translate(-50%,-50%) translateX(${off}px)`;
+  const c = book.chapters[cpIdx];
+  $("cpName").textContent = `${c.name} · ${clock(c.t)}`;
+}
+
+function cpSetIdx(i) {
+  i = Math.max(0, Math.min(book.chapters.length - 1, i));
+  if (i === cpIdx) return;
+  cpIdx = i;
+  renderChapterPick();
+  haptic("tick");
+  // The page behind the reel moves to the chapter under the centre, so the
+  // numbers are never the only thing you have to go on. Browse only — the
+  // playhead stays exactly where it was.
+  browseTo(book.chapters[i].t, "instant");
+}
+
+function cpMoveTo(x) {
+  cpSetIdx(cpBase + Math.round((x - cpOriginX) / cpStep));
+
+  /* Run your finger to either edge and it keeps counting on its own, slowly
+     at first and winding up the longer you hold — so one detent at a time is
+     easy to stop on, and forty of them do not need forty seconds. Without
+     this a book with more chapters than fit in one thumb-throw cannot be
+     crossed end to end without lifting off, and "drag left toward chapter
+     one" should mean chapter one even from chapter forty. */
+  const dir = x < CP_EDGE ? -1 : x > window.innerWidth - CP_EDGE ? 1 : 0;
+  // only restart on a change of direction: a finger resting against the edge
+  // still jitters, and restarting the ramp on every twitch keeps it slow
+  if (dir !== cpEdgeDir) {
+    cpStopEdge();
+    cpEdgeDir = dir;
+    if (dir) cpEdgeStep(dir, CP_EDGE_MS);
+  }
+}
+
+function cpStopEdge() { clearTimeout(cpEdgeTimer); cpEdgeTimer = null; cpEdgeDir = 0; }
+
+function cpEdgeStep(dir, wait) {
+  cpEdgeTimer = setTimeout(() => {
+    const before = cpIdx;
+    cpSetIdx(cpIdx + dir);
+    cpBase += cpIdx - before;   // keep finger position and index in step, so
+                                // the next move doesn't undo the stepping
+    if (cpIdx === before) return cpStopEdge();   // ran out of book
+    cpEdgeStep(dir, Math.max(CP_EDGE_MIN_MS, wait - CP_EDGE_STEP));
+  }, wait);
+}
+
+function endChapterPick(commit) {
+  cpCancelArm();
+  cpStopEdge();
+  if (cpPointer !== null) {
+    try { $("track").releasePointerCapture(cpPointer); } catch (e) {}
+    cpPointer = null;
+  }
+  if (!cpOpen) return;
+  cpOpen = false;
+  $("seek").style.pointerEvents = "";
+  $("chapterPick").classList.remove("show");
+  document.body.classList.remove("picking");
+  // Letting go leaves you reading that chapter; it does not start playing
+  // it. Tap a word to move the playhead. Abandoning puts back whatever you
+  // were looking at before the reel opened.
+  if (!commit) browseTo(cpPrevBrowse, "instant");
+}
+
+(() => {
+  const track = $("track");
+
+  track.addEventListener("pointerdown", e => {
+    scrubChapter = -1;
+    // A mouse held still on a slider means nothing; this is a touch gesture.
+    if (!book || cpOpen || e.pointerType === "mouse") return;
+    cpPointer = e.pointerId;
+    cpOriginX = e.clientX; cpOriginY = e.clientY;
+    cpCancelArm();
+    cpPending = true;
+    cpArmTimer = setTimeout(openChapterPick, CP_HOLD_MS);
+  });
+
+  track.addEventListener("pointermove", e => {
+    if (cpPointer === null || e.pointerId !== cpPointer) return;
+    if (!cpOpen) {
+      // Still deciding. Distance from where the finger landed, not from the
+      // last event: a slow drift would never trip a per-event threshold.
+      if (Math.hypot(e.clientX - cpOriginX, e.clientY - cpOriginY) > CP_SLOP)
+        cpCancelArm();
+      return;
+    }
+    cpMoveTo(e.clientX);
+    e.preventDefault();
+  });
+
+  track.addEventListener("pointerup", () => endChapterPick(true));
+  track.addEventListener("pointercancel", () => endChapterPick(false));
+})();
+
+/* ------------------------------------------------------------ transport */
+
+/* The bar browses. Only a deliberate jump moves the playhead.
+
+   Dragging the scrub bar used to seek, which made "glance at what is
+   coming" and "give up my place" the same gesture. Now the bar, the reader
+   and the chapter picker move a *browse* position, and audio.currentTime
+   moves only when you tap a word or press a transport control. The small
+   mark on the track is where playback really is; the big thumb is where you
+   are looking. They sit on top of each other until you go wandering. */
+
+const clampT = t => Math.max(0, Math.min(book.duration - 0.1, t || 0));
+
+/** A deliberate jump: the playhead really moves, and the view comes along. */
+function playFrom(t) {
+  if (!book) return;
+  t = clampT(t);
+  audio.currentTime = t;
+  follow = true;
+  lastWordTop = -1;
+  showJump(false);
+  browseTo(t, "instant");   // NB "instant": "auto" would defer to
+                            // .reader{scroll-behavior:smooth} and animate.
+  updateTimeline(t);
+  setNow(wordAt(t));
+  lyricIdx = -1;
+  if (compact) renderLyric(t);
+  playUi();
+  savePosition();
+}
+
+/** Look somewhere else without disturbing playback. */
+function browseTo(t, behavior) {
+  if (!book) return;
+  browseT = clampT(t);
+  $("seek").value = Math.floor(browseT);
+  scrollToTime(browseT, behavior || "instant");
+}
+
+/** Stop following the playhead — the view is the reader's now. */
+function stopFollowing() {
+  if (!follow) return;
+  follow = false;
+  showJump(true);
+}
+
+/** The readouts tied to the playhead rather than to where you are looking. */
+function playUi() {
+  if (!book) return;
+  if (!editingClock) $("clockNow").textContent = clock(audio.currentTime);
+  positionPlayMark();
+}
+
+/* The play mark moves every frame while playing, so it is worth not
+   writing a style for sub-pixel changes nobody can see. */
+let lastMarkPct = -1;
+function positionPlayMark() {
+  const el = $("playMark");
+  if (!el || !book || !book.duration) return;
+  const pct = audio.currentTime / book.duration * 100;
+  if (Math.abs(pct - lastMarkPct) < 0.02) return;
+  lastMarkPct = pct;
+  el.style.left = `${pct}%`;
+}
+
+/* ------------------------------------------------- system media controls */
+
+/* Drives the native media notification — the lock screen, the Now Bar and
+   the home-screen media card — through SpineNative (see PlaybackService.kt).
+
+   The standard navigator.mediaSession API was tried first and does nothing
+   in a WebView: it accepts every call, and `dumpsys media_session` still
+   reported "have 0 sessions" with audio confirmed playing. Chrome builds
+   that notification in the browser process, which a WebView has no
+   equivalent of, so the session has to be created on the Android side.
+
+   The page stays the single source of truth for the playhead: these push
+   state out, and SpineMedia below takes commands back in. */
+window.SpineMedia = {
+  play: () => audio.play(),
+  pause: () => audio.pause(),
+  nextChapter: () => $("nextCh").click(),
+  prevChapter: () => $("prevCh").click(),
+  forward: () => playFrom(audio.currentTime + 30),
+  back: () => playFrom(audio.currentTime - 30),
+  seekTo: ms => playFrom((+ms || 0) / 1000),
+};
+
+function pushMediaState() {
+  const n = window.SpineNative;
+  if (!n || !n.updateMedia || !book) return;
+  const ch = book.chapters[chapterAt(audio.currentTime)];
+  try {
+    n.updateMedia(
+      book.title || "Spine",
+      ch ? ch.name : "",
+      Math.round(audio.currentTime * 1000),
+      Math.round((book.duration || 0) * 1000),
+      !audio.paused,
+      audio.playbackRate
+    );
+  } catch (e) {
+    // an older build of the app without the bridge — the page still works
+  }
+}
+
+audio.addEventListener("play", pushMediaState);
+audio.addEventListener("pause", pushMediaState);
+audio.addEventListener("ratechange", pushMediaState);
+audio.addEventListener("seeked", pushMediaState);
+
+/* Tap the elapsed clock to type a timecode — h:mm:ss, m:ss or plain
+   seconds. Edited in place, the same way chapter names and the title are. */
+$("clockNow").onclick = () => {
+  if (!book || editingClock) return;
+  editingClock = true;
+  const el = $("clockNow");
+  el.contentEditable = "true";
+  el.focus();
+  document.getSelection().selectAllChildren(el);
+};
+function commitClock(cancel) {
+  if (!editingClock) return;          // committed already, or never started
+  const el = $("clockNow");
+  editingClock = false;
+  el.contentEditable = "false";
+  if (cancel) return playUi();
+  const parts = el.textContent.trim().split(":").map(x => parseInt(x, 10));
+  if (parts.length && parts.length <= 3 && parts.every(n => Number.isFinite(n))) {
+    playFrom(parts.reduce((total, n) => total * 60 + n, 0));
+  } else {
+    toast("Use h:mm:ss");
+    playUi();
+  }
+}
+// commit from Enter directly rather than leaning on blur to fire — a
+// soft keyboard dismissing doesn't always take focus with it
+$("clockNow").onkeydown = e => {
+  if (e.key === "Enter") { e.preventDefault(); commitClock(false); e.target.blur(); }
+  else if (e.key === "Escape") { commitClock(true); e.target.blur(); }
+};
+$("clockNow").onblur = () => commitClock(false);
+
+/* Play is the one button that gets a haptic. The rest don't: a tick under
+   every tap stops meaning anything, and this is the press you make without
+   looking. */
+$("playPause").onclick = () => {
+  haptic("press");
+  audio.paused ? audio.play() : audio.pause();
+};
+audio.onplay = () => {
+  $("playPause").textContent = "❚❚";
+  /* Play does not drag the view back. It is a request to hear this, not a
+     request to stop reading whatever you had scrolled off to — and with the
+     bar browsing rather than seeking, being somewhere else is an ordinary
+     place to be. If you were still following, the page keeps up with the
+     voice exactly as before; if you were not, the snap pill is already up
+     and waiting. Either way playback carries on from the playhead, which
+     scrolling never moved. */
+  if (follow) {
+    lastWordTop = -1;
+    scrollToTime(audio.currentTime, "instant");
+  }
+  startSaving();
+};
+audio.onpause = () => { $("playPause").textContent = "▶"; playUi(); stopSaving(); savePosition(); };
+audio.onerror = () => toast("This file will not play. It may be a format the player cannot decode.");
+
+$("back30").onclick = () => playFrom(audio.currentTime - 30);
+$("fwd30").onclick = () => playFrom(audio.currentTime + 30);
+$("prevCh").onclick = () => {
+  const ci = chapterAt(audio.currentTime);
+  const back = audio.currentTime - book.chapters[ci].t < 3 ? ci - 1 : ci;
+  playFrom(book.chapters[Math.max(0, back)].t);
+};
+$("nextCh").onclick = () => {
+  const next = book.chapters[chapterAt(audio.currentTime) + 1];
+  playFrom(next ? next.t : book.duration - 1);
+};
+/* One tick per chapter the thumb passes, so the bar can be read by feel
+   with a thumb sitting on top of it instead of by eye. -1 means "no
+   reading yet" — the first move of a drag must not tick. */
+let scrubChapter = -1;
+$("seek").oninput = e => {
+  if (!book) return;
+  /* A finger resting on the track is waiting for the chapter reel, not
+     scrubbing. Put the thumb back where it was and ignore the drift —
+     otherwise the few pixels a still finger wanders are worth twenty
+     minutes of book, and the page lurches away right before the reel
+     opens. Once the hold is cancelled or armed, this stops applying. */
+  if (cpPending || cpOpen) { e.target.value = Math.floor(browseT); return; }
+
+  const t = +e.target.value;
+  stopFollowing();
+  browseTo(t, "instant");
+  const ci = chapterAt(t);
+  if (scrubChapter >= 0 && ci !== scrubChapter) haptic("tick");
+  scrubChapter = ci;
+};
+$("seek").onchange = () => { scrubChapter = -1; };
+
+$("speed").onclick = () => {
+  speedIdx = (speedIdx + 1) % SPEEDS.length;
+  audio.playbackRate = SPEEDS[speedIdx];
+  $("speed").textContent = `${SPEEDS[speedIdx]}X`;
+};
+
+/* ------------------------------------------------------------ sleep timer */
+
+/* Cycles like the speed button rather than opening a menu — it's the same
+   kind of control and the tray has no room for a popover.
+   Counted against audio.currentTime, not wall-clock: a timer set for twenty
+   minutes should mean twenty minutes of *book*. A setTimeout would keep
+   running while paused and cut the night short, and would drift against
+   playback speed — at 1.5x, twenty minutes of listening is only about
+   thirteen minutes of clock. "End of chapter" is the one people actually
+   reach for, so it sits at the front. */
+const SLEEP_OPTIONS = [
+  { label: "Timer", mins: 0 },        // off
+  { label: "Chapter", mins: -1 },     // stop at the next chapter mark
+  { label: "10m", mins: 10 },
+  { label: "20m", mins: 20 },
+  { label: "30m", mins: 30 },
+  { label: "45m", mins: 45 },
+  { label: "1h", mins: 60 },
+];
+let sleepIdx = 0;
+let sleepUntil = null;      // book time (seconds) at which to stop
+
+function sleepLabel() {
+  const opt = SLEEP_OPTIONS[sleepIdx];
+  if (!sleepUntil) return opt.label;
+  const left = Math.max(0, sleepUntil - audio.currentTime);
+  if (left >= 3600) return `${Math.ceil(left / 3600)}h`;
+  if (left >= 60) return `${Math.ceil(left / 60)}m`;
+  return `${Math.ceil(left)}s`;
+}
+
+function setSleep(i) {
+  sleepIdx = i % SLEEP_OPTIONS.length;
+  const opt = SLEEP_OPTIONS[sleepIdx];
+  let noChapterLeft = false;
+  if (!book || opt.mins === 0) {
+    sleepUntil = null;
+  } else if (opt.mins === -1) {
+    const next = book.chapters
+      .map(c => c.t)
+      .filter(t => t > audio.currentTime + 1)
+      .sort((a, b) => a - b)[0];
+    noChapterLeft = next === undefined;
+    sleepUntil = noChapterLeft ? book.duration : next;
+  } else {
+    sleepUntil = audio.currentTime + opt.mins * 60;
+  }
+  $("sleep").classList.toggle("on", !!sleepUntil);
+  $("sleep").textContent = sleepLabel();
+  pushSleepDeadline();
+  if (!sleepUntil) return;
+  // Say which it actually is. Falling back to the end of the book without
+  // mentioning it looks like the timer was ignored — the button jumps
+  // straight to a countdown of hours when you asked for one chapter.
+  toast(opt.mins !== -1 ? `Stopping in ${opt.label}`
+        : noChapterLeft ? "No chapter after this one — stopping at the end of the book"
+        : "Stopping at the next chapter");
+}
+
+$("sleep").onclick = () => setSleep(sleepIdx + 1);
+
+/* checkSleep() used to run only inside the requestAnimationFrame loop, which
+   is exactly the wrong place: the browser stops that loop when the window is
+   hidden — on a phone, the moment the screen goes off — so the timer that is
+   supposed to stop playback while you fall asleep never fired. timeupdate is
+   driven by the audio pipeline instead of the render loop, so it keeps
+   arriving while the screen is dark and playback continues. The interval is a
+   second line of defence for anything that throttles timeupdate too. */
+audio.addEventListener("timeupdate", () => checkSleep());
+setInterval(() => { if (!audio.paused) checkSleep(); }, 1000);
+
+/* And a third: hand the deadline to the foreground service, which Android
+   keeps alive for the whole of playback even when it has frozen this page
+   entirely. Wall-clock, so playback speed has to be divided out — twenty
+   minutes of book at 1.5x is a thirteen-minute wait. Re-sent on anything that
+   changes the arithmetic. */
+function pushSleepDeadline() {
+  const n = window.SpineNative;
+  if (!n || !n.setSleepTimer) return;
+  if (sleepUntil === null || audio.paused) { try { n.setSleepTimer(-1); } catch (e) {} return; }
+  const left = Math.max(0, (sleepUntil - audio.currentTime) / (audio.playbackRate || 1));
+  try { n.setSleepTimer(Math.round(left * 1000)); } catch (e) {}
+}
+["play", "pause", "ratechange", "seeked"].forEach(ev =>
+  audio.addEventListener(ev, pushSleepDeadline));
+
+/* Called from the playback loop. Fading out beats cutting off mid-word —
+   the whole point is that you're falling asleep to it. */
+function checkSleep() {
+  if (sleepUntil === null || audio.paused) return;
+  const left = sleepUntil - audio.currentTime;
+  if (left > 0) {
+    const want = sleepLabel();
+    if ($("sleep").textContent !== want) $("sleep").textContent = want;
+    audio.volume = left < 8 ? Math.max(0.05, left / 8) : 1;
+    return;
+  }
+  audio.pause();
+  audio.volume = 1;
+  sleepUntil = null;
+  sleepIdx = 0;
+  $("sleep").classList.remove("on");
+  $("sleep").textContent = SLEEP_OPTIONS[0].label;
+  pushSleepDeadline();          // cancel the native backstop too
+  toast("Sleep timer finished.");
+}
+
+
+// no window to resize on a phone — this is a plain layout toggle, unlike
+// the desktop's pop-out (which also asks pywebview to shrink the window)
+$("btnPop").onclick = $("btnPopExit").onclick = () => {
+  compact = !compact;
+  $("app").classList.toggle("compact", compact);
+  $("transport").classList.remove("expanded");   // the reading view opens clean
+  $("btnPop").title = compact ? "Back to the full page" : "Reading view";
+  lyricIdx = -1;
+  if (compact) renderLyric(audio.currentTime);
+  positionScrollRail();
+};
+
+$("page").onclick = e => {
+  const w = e.target.closest(".w");
+  if (!w) return;
+  if (w.dataset.note !== undefined) {
+    openNotePop({ kind: "edit", idx: +w.dataset.note }, w.getBoundingClientRect());
+    return;
+  }
+  playFrom(parseFloat(w.dataset.s));
+};
+
+/* Reading away from the playhead used to time out after 3.5 s and snap you
+   back. That fought anyone deliberately reading ahead, and now that the bar
+   browses rather than seeks, wandering off is a normal thing to be doing
+   rather than an accident. Following resumes when you ask for it — the pill
+   below is always there to ask with. */
+function cpOpenSafe() { return cpOpen; }
+
+/* What time is the reader currently looking at? Read by hit-testing the
+   point scrollToTime() aims for, so scrolling back to a spot reports the
+   time that would have put it there. A hit test is O(1); binary-searching
+   91k word spans by offsetTop on every scroll event is not. */
+function timeAtViewTop() {
+  const reader = $("reader");
+  const r = reader.getBoundingClientRect();
+  const y = r.top + r.height * 0.32;
+  const x = r.left + r.width * 0.5;
+  const timeOf = node => {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    const w = el && el.closest && el.closest(".w[data-s]");
+    return w ? parseFloat(w.dataset.s) : null;
+  };
+  /* caretRangeFromPoint snaps to the nearest text, which matters because the
+     aim point lands in the gap between two paragraphs about as often as it
+     lands on a word — elementFromPoint just returns .page there and tells
+     you nothing. */
+  if (document.caretRangeFromPoint) {
+    const t = timeOf(document.caretRangeFromPoint(x, y)?.startContainer);
+    if (t !== null) return t;
+  }
+  // and if even that misses, walk down the page a line at a time
+  for (let dy = 0; dy <= 72; dy += 12) {
+    for (const fx of [0.5, 0.3, 0.7]) {
+      const t = timeOf(document.elementFromPoint(r.left + r.width * fx, y + dy));
+      if (t !== null) return t;
+    }
+  }
+  return null;
+}
+
+/* Scrolling is looking, and the thumb is where you are looking — so the bar
+   has to come with the page. Coalesced onto a frame: scroll fires far more
+   often than there are frames to draw, and each pass costs a hit test. */
+let barSyncQueued = false;
+function syncBarToView() {
+  if (barSyncQueued || !book) return;
+  barSyncQueued = true;
+  /* A beat, not a frame. content-visibility:auto means the paragraphs you
+     just scrolled onto are not laid out yet in the same frame as the scroll,
+     and a hit test against unlaid-out content finds nothing — which read as
+     "the thumb ignores scrolling" until it was measured. The delay doubles
+     as the throttle: scroll fires far more often than this needs to run. */
+  setTimeout(() => {
+    barSyncQueued = false;
+    if (!book || follow || cpOpenSafe()) return;
+    const t = timeAtViewTop();
+    if (t === null) return;
+    browseT = clampT(t);
+    $("seek").value = Math.floor(browseT);   // never scrollToTime here: that would
+         // scroll the page we are reading the position from
+  }, 50);
+}
+
+$("reader").addEventListener("scroll", () => {
+  if (performance.now() < autoScrollUntil) return;
+  stopFollowing();
+  syncBarToView();
+}, { passive: true });
+
+/* Shown whenever the view has drifted off the playhead, playing or paused.
+   Paused matters: with the bar browsing, "look somewhere, then get back"
+   is the whole gesture, and there would otherwise be no way back. */
+/* The pill sits a fixed gap above the transport, whatever height that is.
+   It was pinned at a hard-coded offset, which was about right on a desktop
+   bar and overlapped the phone's taller one — and stayed put when the phone's
+   tray slid up, so the two collided. Measured instead: a ResizeObserver keeps
+   it glued through the tray's animation without a timer, and there is no
+   number to get wrong on a layout nobody has thought about yet. */
+function positionJump() {
+  const tp = $("transport"), pill = $("jumpNow");
+  if (!tp || !pill) return;
+  const h = tp.hidden ? 0 : tp.getBoundingClientRect().height;
+  pill.style.bottom = `${Math.round(h + 18)}px`;
+}
+if (window.ResizeObserver) new ResizeObserver(positionJump).observe($("transport"));
+window.addEventListener("resize", positionJump);
+// ResizeObserver only reports during the rendering steps, which a page
+// that is not being drawn does not always run — so the moments the bar
+// actually changes height say so explicitly too.
+$("transport").addEventListener("transitionend", positionJump);
+positionJump();
+
+function showJump(on) {
+  const el = $("jumpNow");
+  if (!el) return;
+  el.classList.toggle("show", !!(on && book && !compact));
+}
+
+function snapToPlayhead(behavior) {
+  if (!book) return;
+  follow = true;
+  lastWordTop = -1;
+  showJump(false);
+  browseT = audio.currentTime;
+  $("seek").value = Math.floor(browseT);
+  scrollToTime(audio.currentTime, behavior || "smooth");
+}
+$("jumpNow").onclick = () => snapToPlayhead();
+
+/* ------------------------------------------------- transport swipe tray */
+
+/* On a phone the transport shows only the five arrows; the rest of the
+   controls sit behind a swipe up (or a tap on the handle). */
+(() => {
+  const tp = $("transport"), grab = $("grab");
+  let startY = null;
+  const setOpen = on => { tp.classList.toggle("expanded", on); positionJump(); };
+
+  grab.addEventListener("click", () => setOpen(!tp.classList.contains("expanded")));
+
+  /* The whole bar is the gesture target, not just the handle — the handle is
+     a 16px strip and aiming a thumb at it while walking is not realistic.
+     The one exception is the scrub track: a swipe that starts on the slider
+     has to stay a scrub, or opening the tray would drag the playhead across
+     the book. .grab also carries an invisible taller hit area in CSS, so the
+     strip above the handle counts without the handle itself getting bigger. */
+  tp.addEventListener("touchstart", e => {
+    if (e.target.closest("#seek")) { startY = null; return; }
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  tp.addEventListener("touchend", e => {
+    if (startY === null) return;
+    const dy = e.changedTouches[0].clientY - startY;
+    startY = null;
+    if (dy < -24) setOpen(true);
+    else if (dy > 24) setOpen(false);
+  }, { passive: true });
+})();
+
+/* ------------------------------------------------------------ position */
+
+function startSaving() {
+  stopSaving();
+  saveTimer = setInterval(savePosition, 5000);
+}
+function stopSaving() { clearInterval(saveTimer); saveTimer = null; }
+function savePosition() {
+  if (!book) return;
+  book.position = audio.currentTime;
+  api(`/api/position/${book.id}`, { t: audio.currentTime });
+}
+window.addEventListener("beforeunload", savePosition);
+
+/* Tap sets the bookmark here; hold half a second and you go to it. One
+   button for both because they are the same thought — "the place I want to
+   come back to" — and the tray has no room for a second one. */
+const BM_HOLD_MS = 500;
+let bmHoldTimer = null, bmJumped = false;
+
+function updateBookmarkUi() {
+  const btn = $("btnBookmark"), mark = $("bookMark");
+  const at = book && book.bookmark != null ? book.bookmark : null;
+  btn.classList.toggle("set", at !== null);
+  btn.title = at !== null
+    ? `Bookmarked at ${clock(at)} — hold to go there, tap to move it here`
+    : "Save a bookmark to resume from later";
+  if (!mark) return;
+  mark.hidden = at === null;
+  if (at !== null && book.duration) mark.style.left = `${at / book.duration * 100}%`;
+}
+
+$("btnBookmark").addEventListener("pointerdown", () => {
+  bmJumped = false;
+  clearTimeout(bmHoldTimer);
+  if (!book || book.bookmark == null) return;
+  bmHoldTimer = setTimeout(() => {
+    bmJumped = true;                       // so the click that follows is not a set
+    haptic("arm");
+    playFrom(book.bookmark);
+    toast(`Went to your bookmark at ${clock(book.bookmark)}`);
+  }, BM_HOLD_MS);
+});
+["pointerup", "pointercancel", "pointerleave"].forEach(ev =>
+  $("btnBookmark").addEventListener(ev, () => clearTimeout(bmHoldTimer)));
+
+$("btnBookmark").onclick = async () => {
+  if (bmJumped) { bmJumped = false; return; }   // that press was a jump
+  if (!book) return;
+  const t = audio.currentTime;
+  const r = await api(`/api/bookmark/${book.id}`, { t });
+  book.bookmark = r.bookmark;
+  updateBookmarkUi();
+  toast(`Bookmarked at ${clock(t)}`);
+};
+
+/* ------------------------------------------------------------ marks */
+
+$("btnMark").onclick = async () => {
+  if (!book) return;
+  const t = audio.currentTime;
+  book.chapters = [...book.chapters, { t, name: "New mark", auto: false }];
+  await saveChapters();
+  openChapters(t);
+  toast(`Marked at ${clock(t)}`);
+};
+
+async function saveChapters() {
+  const r = await api(`/api/chapters/${book.id}`, { chapters: book.chapters });
+  book.chapters = r.chapters;
+  buildPages(); drawTicks(); updateSubtitle();
+  renderBook(audio.currentTime);
+}
+
+/* ------------------------------------------------------------------ notes */
+
+function openNotePop(mode, rect) {
+  notePopMode = mode;
+  const pop = $("notePop"), text = $("notePopText");
+  text.value = mode.kind === "edit" ? book.notes[mode.idx].text : "";
+  $("notePopDelete").hidden = mode.kind !== "edit";
+  pop.hidden = false;
+
+  const top = Math.min(window.innerHeight - 170, Math.max(8, rect.bottom + 8));
+  const left = Math.min(window.innerWidth - 296, Math.max(8, rect.left));
+  pop.style.top = `${top}px`;
+  pop.style.left = `${left}px`;
+  text.focus();
+}
+function closeNotePop() { $("notePop").hidden = true; notePopMode = null; }
+
+$("notePopCancel").onclick = closeNotePop;
+$("notePopSave").onclick = async () => {
+  const txt = $("notePopText").value.trim();
+  if (!txt) return closeNotePop();
+  const notes = [...book.notes];
+  if (notePopMode.kind === "edit") notes[notePopMode.idx] = { ...notes[notePopMode.idx], text: txt };
+  else notes.push({ s: notePopMode.s, e: notePopMode.e, text: txt });
+  await saveNotes(notes);
+  closeNotePop();
+};
+$("notePopDelete").onclick = async () => {
+  const notes = book.notes.filter((_, k) => k !== notePopMode.idx);
+  await saveNotes(notes);
+  closeNotePop();
+};
+
+async function saveNotes(notes) {
+  const r = await api(`/api/notes/${book.id}`, { notes });
+  book.notes = r.notes;
+  renderBook();
+  drawTicks();
+}
+
+$("page").addEventListener("mouseup", () => {
+  if (compact) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  const startEl = range.startContainer.parentElement?.closest(".w");
+  const endEl = range.endContainer.parentElement?.closest(".w");
+  if (!startEl || !endEl) return;
+  const s = parseFloat(startEl.dataset.s), e = parseFloat(endEl.dataset.e);
+  if (!(e > s)) return;
+  const rect = range.getBoundingClientRect();
+  sel.removeAllRanges();
+  openNotePop({ kind: "new", s, e }, rect);
+});
+
+$("btnNoteHere").onclick = () => {
+  if (!book || !lyric.length) return;
+  const line = lyric[posAt(lyric, audio.currentTime)];   // the sentence on screen
+  openNotePop({ kind: "new", s: line.s, e: line.e }, $("btnNoteHere").getBoundingClientRect());
+};
+
+/* ------------------------------------------------------------ drawers */
+
+const drawer = $("drawer"), scrim = $("scrim");
+function openDrawer(title) {
+  $("drawerTitle").textContent = title;
+  $("drawerBody").classList.remove("lib");
+  drawer.classList.add("open");
+  scrim.classList.add("open");
+}
+function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("open"); }
+$("drawerClose").onclick = closeDrawer;
+scrim.onclick = closeDrawer;
+
+$("btnChapters").onclick = () => openChapters();
+
+function openChapters(focusT) {
+  if (!book) return toast("Import a book first.");
+  openDrawer("Chapters");
+  const body = $("drawerBody");
+  body.innerHTML =
+    `<p class="hint">Rename anything, delete what is wrong, and use <b>Mark here</b>
+      in the player to add your own. Chapters are detected on the computer,
+      before export — reopen there if you want different ones.</p>` +
+    book.chapters.map((c, k) => {
+      const onTimeline = !/^(start|end)$/i.test(c.name);
+      const eye = onTimeline
+        ? `<button class="row-eye${hiddenChapters.has(c.t) ? " off" : ""}"
+             data-eye="${c.t}" title="Show or hide this on the timeline">👁</button>`
+        : "";
+      return `
+      <div class="row${c.auto ? "" : " mine"}" data-k="${k}">
+        ${eye}
+        <span class="row-t">${clock(c.t)}</span>
+        <span class="row-n" data-k="${k}">${esc(c.name)}</span>
+        <button class="row-go" data-go="${c.t}">go</button>
+        <button class="row-x" data-del="${k}">✕</button>
+      </div>`;
+    }).join("");
+
+  body.querySelectorAll("[data-eye]").forEach(b => b.onclick = () => {
+    const t = parseFloat(b.dataset.eye);
+    if (hiddenChapters.has(t)) hiddenChapters.delete(t); else hiddenChapters.add(t);
+    b.classList.toggle("off");
+    drawTicks();
+  });
+
+  body.querySelectorAll("[data-go]").forEach(b =>
+    b.onclick = () => playFrom(parseFloat(b.dataset.go)));
+
+  body.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    book.chapters.splice(+b.dataset.del, 1);
+    await saveChapters();
+    openChapters();
+  });
+
+  body.querySelectorAll(".row-n").forEach(n => {
+    n.onclick = () => {
+      n.contentEditable = "true";
+      n.focus();
+      document.getSelection().selectAllChildren(n);
+    };
+    n.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); n.blur(); } };
+    n.onblur = async () => {
+      n.contentEditable = "false";
+      const name = n.textContent.trim();
+      if (name && name !== book.chapters[+n.dataset.k].name) {
+        book.chapters[+n.dataset.k].name = name;
+        await saveChapters();
+      }
+      openChapters();
+    };
+  });
+
+  if (focusT !== undefined) {
+    const k = book.chapters.findIndex(c => Math.abs(c.t - focusT) < 0.5);
+    const n = body.querySelector(`.row-n[data-k="${k}"]`);
+    if (n) n.click();
+  }
+}
+
+$("btnNotes").onclick = () => openNotes();
+
+function openNotes() {
+  if (!book) return toast("Import a book first.");
+  openDrawer("Notes");
+  const body = $("drawerBody");
+  if (!book.notes.length) {
+    body.innerHTML = `<p class="hint">Nothing marked yet. Select text in the reader
+      — or use the notebook button in reading mode — to add one.</p>`;
+    return;
+  }
+  body.innerHTML = book.notes.map((n, k) => `
+    <div class="row" data-k="${k}">
+      <button class="row-eye${hiddenNotes.has(n.s) ? " off" : ""}"
+        data-eye="${n.s}" title="Show or hide this on the timeline">👁</button>
+      <span class="row-t">${clock(n.s)}</span>
+      <span class="row-n">${esc(n.text)}</span>
+      <button class="row-go" data-go="${n.s}">go</button>
+      <button class="row-x" data-del="${k}">✕</button>
+    </div>`).join("");
+  body.querySelectorAll("[data-eye]").forEach(b => b.onclick = () => {
+    const s = parseFloat(b.dataset.eye);
+    if (hiddenNotes.has(s)) hiddenNotes.delete(s); else hiddenNotes.add(s);
+    b.classList.toggle("off");
+    drawTicks();
+  });
+  body.querySelectorAll("[data-go]").forEach(b =>
+    b.onclick = () => { playFrom(parseFloat(b.dataset.go)); closeDrawer(); });
+  body.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const notes = book.notes.filter((_, k) => k !== +b.dataset.del);
+    await saveNotes(notes);
+    openNotes();
+  });
+}
+
+/* ---------------------------------------------------------------- library */
+
+/* Series that are folded shut. Kept in localStorage rather than in the book
+   files: it is a per-device viewing preference, not a fact about the book, and
+   it has no business travelling inside a phone bundle. */
+const SERIES_SHUT = "spine.shutSeries";
+const shutSeries = () => new Set(JSON.parse(localStorage.getItem(SERIES_SHUT) || "[]"));
+const setShut = set => localStorage.setItem(SERIES_SHUT, JSON.stringify([...set]));
+
+let libraryItems = [];
+let libraryQuery = "";
+
+function libRowHtml(b) {
+  return `
+      <div class="row stack lib-row" data-open="${b.id}">
+        <span class="row-sub">${clock(b.position)} of ${clock(b.duration)} ·
+          ${b.chapters} chapters${b.missing ? " · audio missing" : ""}</span>
+        <div class="lib-head">
+          <span class="row-n">${esc(b.title)}</span>
+          <button class="row-go trash icon-btn" data-del-book="${b.id}" title="Remove from the library">${TRASH_ICON}</button>
+        </div>
+        <div class="lib-actions">
+          <button class="row-go" data-open-at="${b.id}|last">Last Time</button>
+          <button class="row-go" data-open-at="${b.id}|start">Start</button>
+          ${b.bookmark != null
+            ? `<button class="row-go" data-open-at="${b.id}|bookmark">Bookmark · ${clock(b.bookmark)}</button>`
+            : ""}
+          <button class="row-go series-btn" data-series="${b.id}"
+                  title="Group this book into a series">${b.series ? esc(b.series) : "+ Series"}</button>
+        </div>
+      </div>`;
+}
+
+function renderLibrary() {
+  const q = libraryQuery.trim().toLowerCase();
+  const match = b => !q || (b.title || "").toLowerCase().includes(q)
+                        || (b.series || "").toLowerCase().includes(q);
+  const items = libraryItems.filter(match);
+
+  if (!libraryItems.length) {
+    $("libList").innerHTML = `<p class="hint">Nothing here yet. Use the Import button (top right) to bring in a Phone bundle exported from Spine on your computer.</p>`;
+    return;
+  }
+  if (!items.length) {
+    $("libList").innerHTML = `<p class="hint">Nothing matches “${esc(libraryQuery)}”.</p>`;
+    return;
+  }
+
+  /* Grouped in the library's own recently-played order: a series sits where
+     its most recent book would have sat, so whatever you were last listening
+     to stays near the top whether or not it belongs to a series. */
+  const groups = [];
+  const bySeries = new Map();
+  for (const b of items) {
+    if (!b.series) { groups.push({ solo: b }); continue; }
+    let g = bySeries.get(b.series);
+    if (!g) { g = { series: b.series, books: [] }; bySeries.set(b.series, g); groups.push(g); }
+    g.books.push(b);
+  }
+
+  const shut = shutSeries();
+  // A search should show what it found rather than make you open folders.
+  const forceOpen = !!q;
+
+  $("libList").innerHTML = groups.map(g => {
+    if (g.solo) return libRowHtml(g.solo);
+    const open = forceOpen || !shut.has(g.series);
+    const started = g.books.filter(b => b.position > 30).length;
+    return `
+      <div class="series">
+        <button class="series-head${open ? " open" : ""}" data-toggle="${esc(g.series)}">
+          <span class="series-caret">${open ? "▾" : "▸"}</span>
+          <span class="series-name">${esc(g.series)}</span>
+          <span class="series-count">${g.books.length} book${g.books.length === 1 ? "" : "s"}${started ? ` · ${started} started` : ""}</span>
+        </button>
+        <div class="series-books"${open ? "" : " hidden"}>${g.books.map(libRowHtml).join("")}</div>
+      </div>`;
+  }).join("");
+
+  wireLibrary();
+}
+
+function wireLibrary() {
+  const body = $("libList");
+
+  body.querySelectorAll("[data-toggle]").forEach(h => h.onclick = e => {
+    e.stopPropagation();
+    const name = h.dataset.toggle;
+    const set = shutSeries();
+    if (set.has(name)) set.delete(name); else set.add(name);
+    setShut(set);
+    renderLibrary();
+  });
+
+  body.querySelectorAll("[data-open-at]").forEach(btn =>
+    btn.onclick = e => {
+      e.stopPropagation();
+      const i = btn.dataset.openAt.indexOf("|");
+      loadBook(btn.dataset.openAt.slice(0, i), btn.dataset.openAt.slice(i + 1));
+    });
+  body.querySelectorAll("[data-open]").forEach(r =>
+    r.onclick = () => loadBook(r.dataset.open));
+
+  /* Rename in place, the same way chapter names and the series field work.
+     The row's own click opens the book, so this has to stop propagation or
+     every rename would also start playback. */
+  body.querySelectorAll(".lib-row .row-n").forEach(el => el.onclick = async e => {
+    e.stopPropagation();
+    if (el.isContentEditable) return;
+    const id = el.closest("[data-open]").dataset.open;
+    const cur = el.textContent.trim();
+    el.contentEditable = "true";
+    el.focus();
+    document.getSelection().selectAllChildren(el);
+    const commit = async save => {
+      el.contentEditable = "false";
+      const name = el.textContent.trim().slice(0, 200);
+      if (!save || !name || name === cur) { el.textContent = cur; return; }
+      const r = await api(`/api/title/${id}`, { title: name });
+      const item = libraryItems.find(b => b.id === id);
+      if (item) item.title = r.title;
+      if (book && book.id === id) $("title").textContent = r.title;   // header too
+      renderLibrary();
+    };
+    el.onblur = () => commit(true);
+    el.onkeydown = ev => {
+      if (ev.key === "Enter") { ev.preventDefault(); el.blur(); }
+      if (ev.key === "Escape") { ev.preventDefault(); el.onblur = null; commit(false); }
+    };
+  });
+
+  /* Typed in place, the same way chapter names and the book title are — no
+     dialog, no list of series to maintain, and clearing the text takes the
+     book back out of its group. */
+  /* Keeping a copy. Offered per book rather than done for you: it is
+     hundreds of megabytes, and it is the reader's disk. On Safari there are
+     no file handles to remember, so this is the only way a book opens on a
+     second visit without being handed the file again. */
+  body.querySelectorAll("[data-keep]").forEach(btn => btn.onclick = async e => {
+    e.stopPropagation();
+    const id = btn.dataset.keep;
+    if (btn.classList.contains("on")) {
+      await SpineLocal.dropCopy(id);
+      btn.classList.remove("on");
+      btn.textContent = "Keep offline";
+      return toast("Copy removed. The book and your place are still here.");
+    }
+    const blob = SpineLocal.heldAudio(id);
+    if (!blob) return toast("Open the book first, then keep a copy of it.");
+
+    const room = await SpineLocal.spaceLeft();
+    if (room && room.quota && blob.size > room.quota - room.used)
+      return toast("Not enough room on this device for a copy.");
+
+    btn.disabled = true;
+    try {
+      await SpineLocal.askPersist();
+      await SpineLocal.keepCopy(id, blob, f => {
+        btn.textContent = `Keeping ${Math.round(f * 100)}%`;
+      });
+      btn.classList.add("on");
+      btn.textContent = "Kept";
+      toast("Kept — this book will open on its own next time.");
+    } catch (err) {
+      btn.textContent = "Keep offline";
+      toast("Could not keep a copy: " + ((err && err.message) || "out of room"));
+    }
+    btn.disabled = false;
+  });
+
+  body.querySelectorAll("[data-series]").forEach(btn => btn.onclick = async e => {
+    e.stopPropagation();
+    const id = btn.dataset.series;
+    const cur = (libraryItems.find(b => b.id === id) || {}).series || "";
+    btn.classList.add("editing");
+    btn.textContent = cur;
+    btn.contentEditable = "true";
+    btn.focus();
+    document.getSelection().selectAllChildren(btn);
+    const commit = async save => {
+      btn.contentEditable = "false";
+      btn.classList.remove("editing");
+      const name = btn.textContent.trim().slice(0, 120);
+      if (!save || name === cur) return renderLibrary();
+      const r = await api(`/api/series/${id}`, { series: name });
+      const item = libraryItems.find(b => b.id === id);
+      if (item) item.series = r.series;
+      renderLibrary();
+    };
+    btn.onblur = () => commit(true);
+    btn.onkeydown = ev => {
+      if (ev.key === "Enter") { ev.preventDefault(); btn.blur(); }
+      if (ev.key === "Escape") { ev.preventDefault(); btn.onblur = null; commit(false); }
+    };
+  });
+
+  // two-step rather than a native confirm(): one tap arms it, the next
+  // removes, and it disarms itself if you walk away
+  body.querySelectorAll("[data-del-book]").forEach(btn => {
+    btn.onclick = async e => {
+      e.stopPropagation();
+      if (btn.dataset.armed !== "1") {
+        btn.dataset.armed = "1";
+        btn.textContent = "Sure?";
+        btn.classList.add("danger");
+        clearTimeout(btn._t);
+        btn._t = setTimeout(() => {
+          btn.dataset.armed = "";
+          btn.innerHTML = TRASH_ICON;
+          btn.classList.remove("danger");
+        }, 4000);
+        return;
+      }
+      const id = btn.dataset.delBook;
+      await api(`/api/forget/${id}`, {});
+      if (book && book.id === id) {      // it was the open one — clear the view
+        book = null;
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        $("page").innerHTML = "";
+        $("blank").hidden = false;
+        $("transport").hidden = true;
+        $("title").textContent = "Spine";
+        $("subtitle").textContent = "Nothing open";
+      }
+      toast("Removed from the library.");
+      libraryItems = libraryItems.filter(x => x.id !== id);
+      renderLibrary();
+    };
+  });
+}
+
+$("btnLibrary").onclick = async () => {
+  openDrawer("Library");
+  // openDrawer only shows the panel — it doesn't touch drawerBody, so without
+  // this the previous drawer's content (Chapters, Notes, or a stale Library
+  // list) stays on screen for the length of this fetch.
+  $("drawerBody").innerHTML = `<p class="hint">Loading…</p>`;
+  libraryItems = await api("/api/library");
+  $("drawerBody").innerHTML =
+    `<label class="lib-find"><input id="libFind" type="search"
+        placeholder="Search titles and series" autocomplete="off"></label>
+     <div id="libList"></div>`;
+  const find = $("libFind");
+  find.value = libraryQuery;
+  find.oninput = () => { libraryQuery = find.value; renderLibrary(); };
+  renderLibrary();
+
+  /* Which build this is, and where it lives. A dev copy and an installed one
+     are indistinguishable once open, and launching the wrong one is an easy
+     way to spend an afternoon wondering why a fix did not take. */
+  try {
+    const a = await api("/api/about");
+    $("drawerBody").classList.add("lib");
+    const foot = document.createElement("p");
+    foot.className = "lib-foot";
+    foot.textContent = `Spine ${a.version} · ${a.kind}`;
+    foot.title = `${a.path}
+Click to check for an update`;
+    /* Tap it to ask again. The startup check runs once, so anything released
+       while the app was already open stays invisible until the next cold
+       start — which reads as the updater being broken rather than merely
+       early. */
+    foot.onclick = async () => {
+      if (foot.dataset.busy) return;
+      foot.dataset.busy = "1";
+      const was = foot.textContent;
+      foot.textContent = "Checking…";
+      let u = null;
+      try { u = await api("/api/update/check", {}); } catch (e) { /* older build */ }
+      foot.textContent = was;
+      delete foot.dataset.busy;
+      if (!u || u.state === "offline") return toast("Could not reach the update server.");
+      if (u.state !== "available") return toast(`Spine ${a.version} is the latest.`);
+      offerUpdate(u);
+    };
+    $("drawerBody").appendChild(foot);
+  } catch (e) { /* older build without the endpoint — no footer, no harm */ }
+};
+
+
+/* ------------------------------------------------------------ find */
+
+let findTimer = null;
+$("find").oninput = e => {
+  clearTimeout(findTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2) return;
+  findTimer = setTimeout(() => runFind(q), 220);
+};
+
+function runFind(q) {
+  if (!book) return;
+  const needle = q.toLowerCase();
+  const chapterHits = book.chapters
+    .map((c, k) => ({ c, k }))
+    .filter(x => x.c.name.toLowerCase().includes(needle))
+    .slice(0, 40);
+  const textHits = [];
+  for (const s of book.segments) {
+    const i = s.t.toLowerCase().indexOf(needle);
+    if (i < 0) continue;
+    textHits.push({ t: s.s, snip: s.t, at: i });
+    if (textHits.length >= 150) break;
+  }
+
+  openDrawer(`Found ${chapterHits.length + textHits.length}`);
+  const mark = (text, at) =>
+    esc(text.slice(0, at)) + "<mark>" + esc(text.substr(at, q.length)) +
+    "</mark>" + esc(text.slice(at + q.length));
+
+  $("drawerBody").innerHTML =
+    (chapterHits.length
+      ? `<p class="hint">Chapters</p>` + chapterHits.map(x => `
+          <div class="row hit-row" data-t="${x.c.t}">
+            <span class="row-t">${clock(x.c.t)}</span>
+            <span class="row-n">${esc(x.c.name)}</span>
+          </div>`).join("")
+      : "") +
+    (textHits.length
+      ? `<p class="hint">In the text</p>` + textHits.map(h => `
+          <div class="row hit-row" data-t="${h.t}">
+            <span class="row-t">${clock(h.t)}</span>
+            <span class="row-n">${mark(h.snip, h.at)}</span>
+          </div>`).join("")
+      : `<p class="hint">No match for "${esc(q)}".</p>`);
+
+  $("drawerBody").querySelectorAll("[data-t]").forEach(r =>
+    r.onclick = () => { playFrom(parseFloat(r.dataset.t)); closeDrawer(); });
+}
+
+/* ------------------------------------------------------------ title */
+
+$("title").ondblclick = () => {
+  if (!book) return;
+  const h = $("title");
+  h.contentEditable = "true"; h.focus();
+  document.getSelection().selectAllChildren(h);
+};
+$("title").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } };
+$("title").onblur = async e => {
+  e.target.contentEditable = "false";
+  const t = e.target.textContent.trim();
+  if (book && t && t !== book.title) {
+    const r = await api(`/api/title/${book.id}`, { title: t });
+    book.title = r.title;
+  }
+  e.target.textContent = book ? book.title : "Spine";
+};
+
+/* ------------------------------------------------------------ keys */
+
+document.addEventListener("keydown", e => {
+  const typing = /INPUT|TEXTAREA/.test(e.target.tagName) ||
+    e.target.isContentEditable;
+  if (e.key === "Escape") { closeDrawer(); $("notePop").hidden = true; e.target.blur?.(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    e.preventDefault(); $("find").focus(); return;
+  }
+  if (typing || !book) return;
+
+  if (e.key === " ") { e.preventDefault(); $("playPause").click(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); $("back30").click(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); $("fwd30").click(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); $("prevCh").click(); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); $("nextCh").click(); }
+  else if (e.key.toLowerCase() === "m") $("btnMark").click();
+  else if (e.key.toLowerCase() === "s") $("speed").click();
+});
+
+/* pick up where the last session ended */
+(async () => {
+  try {
+    const items = await api("/api/library");
+    const last = Array.isArray(items) ? items.find(b => !b.missing) : null;
+    if (last) {
+      await loadBook(last.id);
+    } else {
+      $("blank").hidden = false;
+    }
+  } catch (e) {
+    $("blank").hidden = false;
+  }
+})();
+
+/* ------------------------------------------------------------ updates */
+
+/* Two paths, the same as the desktop.
+
+   A small one: the interface is served out of filesDir once patched, so new
+   files there and a reload is the whole update. ~34 KB, no prompt, nothing
+   to confirm.
+
+   A big one: anything Kotlin changed, so the APK itself has to be replaced.
+   Android cannot do that quietly — that is a platform rule, not an obstacle
+   to route around. The most this can do is fetch the APK and open the
+   system installer, which asks you itself. Android relaunches the app once
+   you confirm, so there is no restart step to build on that side. */
+(async () => {
+  await new Promise(r => setTimeout(r, 2500));
+  let u;
+  try { u = await api("/api/update"); } catch (e) { return; }
+  if (!u || u.state !== "available") return;
+  if (sessionStorage.getItem("spine.skipUpdate") === u.version) return;
+  offerUpdate(u);
+})();
+
+/* Put the banner up for a release we know about. Split out so the automatic
+   check and the "check now" tap on the version line show the same thing — a
+   re-check that found something must not be silent just because it was asked
+   for by hand. */
+function offerUpdate(u) {
+  const small = !!u.canPatch;
+  $("updateTitle").textContent = `Spine ${u.version} is available`;
+  $("updateNotes").textContent = (u.notes || []).join(" · ");
+  $("updateGo").textContent = "Update";
+  $("update").hidden = false;
+
+  $("updateLater").onclick = () => {
+    sessionStorage.setItem("spine.skipUpdate", u.version);
+    $("update").hidden = true;
+  };
+
+  $("updateGo").onclick = async () => {
+    const btn = $("updateGo");
+    btn.disabled = true;
+    btn.textContent = small ? "Updating…" : "Downloading…";
+    const r = await api(small ? "/api/update/web" : "/api/update/apk", {});
+    if (r.error) {
+      btn.disabled = false;
+      btn.textContent = "Update";
+      return toast(r.error);
+    }
+    $("update").hidden = true;
+    if (!r.reload) return toast("Follow the prompt to finish installing.");
+    // Save where we were first: the reload throws the page away, and the
+    // position auto-save only runs every five seconds.
+    savePosition();
+    btn.textContent = "Restarting…";
+    setTimeout(() => location.reload(), 400);
+  };
+}
+
+
+/* Makes this openable from a home screen and openable offline. Registered
+   last so a browser without it still runs everything above. */
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
