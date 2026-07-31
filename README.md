@@ -24,12 +24,40 @@ Mac, an iPhone, a Windows PC, a Chromebook — and there is nothing to install,
 no account, and no upload. The file is read from your own device; there is no
 server for it to go to.
 
-Add it to your home screen or dock and it opens like an app, offline. Tick
-**Keep offline** on a book and it will open on its own next time instead of
-asking for the file again.
-
 It plays and reads books; it does not make them. Transcribing a new book is
 what the Windows app below is for.
+
+### Make it an app
+
+The reader can install itself, with no app store and nothing to approve:
+
+| | |
+|---|---|
+| **Mac, Safari** | **File → Add to Dock** |
+| **Mac, Chrome or Edge** | the install icon in the address bar |
+| **iPhone or iPad** | Share → **Add to Home Screen** |
+| **Windows, Chrome or Edge** | the install icon in the address bar |
+
+You get a real icon, its own window with no browser around it, and it opens
+offline.
+
+**Do this before you settle in with a book.** It is not decoration. Browsers
+are allowed to clear a website's stored data when space runs short, and
+Safari clears it after seven days of not visiting — but an installed app is
+treated as software rather than a website and is left alone. Installing is
+what makes the next part stick.
+
+### Keep a book on the device
+
+Open a book, then in **Library** tick **Keep offline** next to it.
+
+Without this the reader remembers the book — the words, chapters, notes and
+your place — but not the audio, because the audio is hundreds of megabytes
+and it was only ever reading your file where it sat. So it would ask for the
+file again each visit.
+
+With it, the book opens on its own, offline, straight back to where you were.
+Untick it whenever you want the space back; your place and notes stay.
 
 ---
 
