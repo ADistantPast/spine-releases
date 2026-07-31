@@ -116,10 +116,20 @@ async function loadBook(id, startAt = "last") {
   renderBook(t);
   lyricIdx = -1;
   if (compact) renderLyric(t);
-  audio.currentTime = t;
+  seekWhenReady(t);
   browseT = t;
   lastMarkPct = -1;   // a new book means a new duration behind the same %
   updateTimeline(t);
+  /* Light the word the book is sitting on, straight away.
+
+     Nothing did. The highlight is only ever set by the playback loop or by a
+     deliberate jump, so an opened book showed a correct playhead over unlit
+     text until you pressed play. Quietly, because renderBook() has already
+     scrolled to this moment and setNow aims a little higher up the page —
+     doing both is a visible jolt on load. */
+  // Math.max: at the very start nothing has been spoken yet and wordAt()
+  // rightly answers "no word" — but the word you are *on* is the first one.
+  setNow(Math.max(0, wordAt(t)), true);
   playUi();
   updateBookmarkUi();
   placeCarets();
@@ -137,6 +147,33 @@ async function loadBook(id, startAt = "last") {
     setTimeout(() => SpineNeedsAudio(b.id), 900);
   }
 }
+
+/* Where the book should open, applied once the audio can accept it.
+
+   Assigning currentTime before the element has its metadata is silently
+   discarded — there is no duration yet to seek within — so a book resumed
+   from a saved position sat at 0:00:00 while the text was correctly lit at
+   the real place. Remember the intended moment and apply it the instant the
+   metadata lands. */
+let pendingStart = null;
+
+function seekWhenReady(t) {
+  pendingStart = t;
+  if (audio.readyState >= 1) applyPendingStart();   // already loaded: now
+}
+
+function applyPendingStart() {
+  if (pendingStart === null || !book) return;
+  const t = pendingStart;
+  pendingStart = null;
+  audio.currentTime = t;
+  browseT = t;
+  // the bar is only driven by the playback loop, which is not running
+  // while the book sits paused at the place it reopened to
+  $("seek").value = Math.floor(t);
+  playUi();
+}
+audio.addEventListener("loadedmetadata", applyPendingStart);
 
 function updateSubtitle() {
   const n = book.chapters.length;
@@ -388,7 +425,9 @@ function wordAt(t) {
   return best;
 }
 
-function setNow(i) {
+/* quiet: light the word but do not scroll to it — for when the page has
+   already been placed and a second scroll would only shift it. */
+function setNow(i, quiet) {
   if (nowIdx >= 0 && pw.el[nowIdx]) pw.el[nowIdx].classList.remove("now");
 
   if (i > nowIdx) for (let j = nowIdx + 1; j <= i; j++) pw.el[j]?.classList.add("read");
@@ -406,7 +445,7 @@ function setNow(i) {
     liveSeg = seg;
   }
 
-  if (!follow) return;
+  if (!follow || quiet) return;
   const reader = $("reader");
   const r = el.getBoundingClientRect(), rr = reader.getBoundingClientRect();
   if (Math.abs(r.top - lastWordTop) < 4) return;   // same line, no scroll
