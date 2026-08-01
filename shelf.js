@@ -12,6 +12,13 @@
 (() => {
   "use strict";
 
+  /* The web reader's own version, reported to the Library footer through
+     /api/about exactly as the desktop and the phone report theirs. There is
+     no build step and no version.txt to read, so it is written here — keep
+     it in step with VERSION in sw.js, which rotates the cache. */
+  const WEB_VERSION = "1.0.10";
+  window.SPINE_WEB_VERSION = WEB_VERSION;
+
   const DB_NAME = "spine";
   const DB_VERSION = 1;
   const STORE = "books";
@@ -419,8 +426,16 @@
                  kind: "Web reader", path: location.host || "offline" };
 
       case "update":
-        // Nothing to update: the page is the app, and it reloads itself.
-        return { state: "current", version: window.SPINE_WEB_VERSION || "web" };
+        /* There is no installer to fetch — the page *is* the app. But the
+           shell is served cache-first, so a new release can be sitting on
+           the server while this tab happily serves the old one. Tapping the
+           version asks the worker to go and look, which is the only thing
+           "check for an update" can honestly mean here. */
+        try {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) await reg.update();
+        } catch (e) { /* no worker, or offline: the page is what it is */ }
+        return { state: "current", version: WEB_VERSION };
 
       case "library": {
         const books = await allBooks();

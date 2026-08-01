@@ -1278,13 +1278,25 @@ audio.onerror = () => {
 
 $("back30").onclick = () => playFrom(audio.currentTime - 30);
 $("fwd30").onclick = () => playFrom(audio.currentTime + 30);
+/* Chapter steps count from what you are *looking* at, not from where the
+   voice is. While following they are the same thing, so nothing changes in
+   the ordinary case — but once you have read ahead they are not, and
+   counting from the playhead made these buttons yank the page backwards:
+   reading in chapter 4 with the voice still in chapter 1, "next chapter"
+   went to chapter 2. Measured exactly that — scrollTop 3119 back to 583.
+   It reads as the text refusing to leave the playhead.
+
+   They still commit: playFrom() moves the real playhead, the scrub mark and
+   the lock-screen state to wherever you land, so this is navigation rather
+   than browsing. Stepping the view without the audio is what scrolling and
+   the scrub bar are already for. */
 $("prevCh").onclick = () => {
-  const ci = chapterAt(audio.currentTime);
-  const back = audio.currentTime - book.chapters[ci].t < 3 ? ci - 1 : ci;
+  const ci = chapterAt(browseT);
+  const back = browseT - book.chapters[ci].t < 3 ? ci - 1 : ci;
   playFrom(book.chapters[Math.max(0, back)].t);
 };
 $("nextCh").onclick = () => {
-  const next = book.chapters[chapterAt(audio.currentTime) + 1];
+  const next = book.chapters[chapterAt(browseT) + 1];
   playFrom(next ? next.t : book.duration - 1);
 };
 /* One tick per chapter the thumb passes, so the bar can be read by feel
