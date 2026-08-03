@@ -341,6 +341,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 #clockNow[contenteditable="true"]{
   outline:none;border-bottom-color:var(--verdigris);color:var(--verdigris);
 }
+/* Editing in place sits at the bottom of the screen, right where a
+   keyboard opens first. Floating it to the centre (position set from JS,
+   in px, against whatever visualViewport reports as visible) keeps it
+   clear regardless of keyboard height. */
+#clockNow.clock-editing{
+  position:fixed;z-index:32;border-bottom:none;
+  background:var(--slab-2);border:1px solid var(--hair);border-radius:10px;
+  padding:12px 18px;font-size:22px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+}
 .clock.dim{color:var(--dust)}
 
 .track{position:relative;flex:1;height:34px}

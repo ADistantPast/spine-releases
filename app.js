@@ -22,7 +22,6 @@ let saveTimer = null;
 let compact = false;
 let lyricIdx = -1;
 let notePopMode = null;         // {kind:"new", s, e} | {kind:"edit", idx}
-let notePopRect = null;         // the word/selection rect the popover opened against
 let editingClock = false;       // the clock is a jump-to field while typing
 
 /* ------------------------------------------------------------ helpers */
@@ -738,7 +737,8 @@ function applyKeyboardInset() {
   if (!vv) return;
   const short = vv.height < window.innerHeight - 120;
   document.body.style.height = short ? `${vv.height}px` : "";
-  positionNotePop();   // a no-op unless the popover is actually open
+  positionNotePop();    // a no-op unless the popover is actually open
+  positionClockEdit();  // ditto for the typed-timecode edit
 }
 if (vv) {
   vv.addEventListener("resize", applyKeyboardInset);
@@ -875,7 +875,7 @@ function drawTicks() {
     stopFollowing();
     browseTo(parseFloat(el.dataset.seek), "instant");
     if (el.dataset.noteK !== undefined)
-      openNotePop({ kind: "edit", idx: +el.dataset.noteK }, el.getBoundingClientRect());
+      openNotePop({ kind: "edit", idx: +el.dataset.noteK });
   });
 }
 
@@ -1281,14 +1281,34 @@ $("clockNow").onclick = () => {
   editingClock = true;
   const el = $("clockNow");
   el.contentEditable = "true";
+  el.classList.add("clock-editing");
+  positionClockEdit();
   el.focus();
   document.getSelection().selectAllChildren(el);
 };
+/* Editing in place put the field right where the transport bar sits, at
+   the bottom of the screen — exactly what an on-screen keyboard covers
+   first. Floating it to the centre of whatever visualViewport currently
+   reports as visible (same reasoning as positionNotePop() above) keeps it
+   clear of the keyboard without having to guess its height. */
+function positionClockEdit() {
+  const el = $("clockNow");
+  if (!el.classList.contains("clock-editing")) return;
+  const vw = (vv && vv.width) || window.innerWidth;
+  const vh = (vv && vv.height) || window.innerHeight;
+  const ox = (vv && vv.offsetLeft) || 0;
+  const oy = (vv && vv.offsetTop) || 0;
+  const r = el.getBoundingClientRect();
+  el.style.left = `${ox + (vw - r.width) / 2}px`;
+  el.style.top = `${oy + (vh - r.height) / 2}px`;
+}
 function commitClock(cancel) {
   if (!editingClock) return;          // committed already, or never started
   const el = $("clockNow");
   editingClock = false;
   el.contentEditable = "false";
+  el.classList.remove("clock-editing");
+  el.style.left = ""; el.style.top = "";
   if (cancel) return playUi();
   const parts = el.textContent.trim().split(":").map(x => parseInt(x, 10));
   if (parts.length && parts.length <= 3 && parts.every(n => Number.isFinite(n))) {
@@ -1547,7 +1567,7 @@ $("page").onclick = e => {
   const w = e.target.closest(".w");
   if (!w) return;
   if (w.dataset.note !== undefined) {
-    openNotePop({ kind: "edit", idx: +w.dataset.note }, w.getBoundingClientRect());
+    openNotePop({ kind: "edit", idx: +w.dataset.note });
     return;
   }
   playFrom(parseFloat(w.dataset.s));
@@ -1825,9 +1845,8 @@ async function saveChapters() {
 
 /* ------------------------------------------------------------------ notes */
 
-function openNotePop(mode, rect) {
+function openNotePop(mode) {
   notePopMode = mode;
-  notePopRect = rect;
   const pop = $("notePop"), text = $("notePopText");
   text.value = mode.kind === "edit" ? book.notes[mode.idx].text : "";
   $("notePopDelete").hidden = mode.kind !== "edit";
@@ -1835,19 +1854,28 @@ function openNotePop(mode, rect) {
   positionNotePop();
   text.focus();
 }
-/* Split out so a keyboard opening later can ask again against whatever is
-   actually visible now, rather than the position only ever being right at
-   the instant the popover opened — see applyKeyboardInset() above. */
+/* Centered in whatever visualViewport currently reports as visible, not
+   anchored near the selection. Anchoring below the selection and clamping
+   against an assumed keyboard height read as "still off" depending on
+   which keyboard app was open — Google's and Samsung's report the visible
+   area differently enough that a fixed clamp couldn't cover both. Centering
+   only needs the *total* visible height, which every keyboard shrinks
+   visualViewport to correctly, so it holds regardless of which one opened
+   it. Split out so a keyboard opening later can ask again against whatever
+   is actually visible now, rather than the position only ever being right
+   at the instant the popover opened — see applyKeyboardInset() above. */
 function positionNotePop() {
   const pop = $("notePop");
-  if (pop.hidden || !notePopRect) return;
-  const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-  const top = Math.min(vh - 170, Math.max(8, notePopRect.bottom + 8));
-  const left = Math.min(window.innerWidth - 296, Math.max(8, notePopRect.left));
-  pop.style.top = `${top}px`;
-  pop.style.left = `${left}px`;
+  if (pop.hidden) return;
+  const vw = (vv && vv.width) || window.innerWidth;
+  const vh = (vv && vv.height) || window.innerHeight;
+  const ox = (vv && vv.offsetLeft) || 0;
+  const oy = (vv && vv.offsetTop) || 0;
+  const r = pop.getBoundingClientRect();
+  pop.style.left = `${ox + (vw - r.width) / 2}px`;
+  pop.style.top = `${oy + (vh - r.height) / 2}px`;
 }
-function closeNotePop() { $("notePop").hidden = true; notePopMode = null; notePopRect = null; }
+function closeNotePop() { $("notePop").hidden = true; notePopMode = null; }
 
 $("notePopCancel").onclick = closeNotePop;
 $("notePopSave").onclick = async () => {
@@ -1876,11 +1904,8 @@ function noteFromCurrentSelection() {
   if (compact || !$("notePop").hidden) return;
   const picked = selectedWordRange();
   if (!picked) return;
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return;
-  const rect = sel.getRangeAt(0).getBoundingClientRect();
-  sel.removeAllRanges();
-  openNotePop({ kind: "new", ...picked }, rect);
+  window.getSelection()?.removeAllRanges();
+  openNotePop({ kind: "new", ...picked });
 }
 
 $("page").addEventListener("mouseup", noteFromCurrentSelection);
@@ -1922,12 +1947,11 @@ document.addEventListener("selectionchange", () => {
 $("btnNoteHere").onclick = () => {
   if (!book) return;
   const picked = selectedWordRange();
-  if (picked) return openNotePop({ kind: "new", ...picked },
-                                 $("btnNoteHere").getBoundingClientRect());
+  if (picked) return openNotePop({ kind: "new", ...picked });
   const w = pw.el[nowIdx];
   const s = w ? parseFloat(w.dataset.s) : audio.currentTime;
   const e = w ? parseFloat(w.dataset.e) : audio.currentTime;
-  openNotePop({ kind: "new", s, e }, $("btnNoteHere").getBoundingClientRect());
+  openNotePop({ kind: "new", s, e });
 };
 
 /* The words the reader has selected, as a time range — or null. Shared by
