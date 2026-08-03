@@ -22,6 +22,7 @@ let saveTimer = null;
 let compact = false;
 let lyricIdx = -1;
 let notePopMode = null;         // {kind:"new", s, e} | {kind:"edit", idx}
+let notePopRect = null;         // the word/selection rect the popover opened against
 let editingClock = false;       // the clock is a jump-to field while typing
 
 /* ------------------------------------------------------------ helpers */
@@ -38,6 +39,11 @@ const short = sec => {
 };
 const TRASH_ICON =
   '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 6.5 H20 M9.5 6.5 V4.5 H14.5 V6.5" /><path d="M6.5 6.5 L7.5 20 H16.5 L17.5 6.5" /><path d="M10 10 V16.5 M14 10 V16.5" /></svg>';
+// The series button's empty state — same stroke weight and viewBox as every
+// other icon in the app, rather than the word "Series" doing double duty as
+// both a label and the only clue that clicking it does anything.
+const PLUS_ICON =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5 V19 M5 12 H19" /></svg>';
 
 const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
@@ -209,6 +215,37 @@ function splitSegmentsAtChapters(segments, chapters) {
    whole paragraph. The compact view wants one real sentence at a time, so
    re-cut on end punctuation using the word timings. (Same idea as
    _sentences() in app.py, which does this for chapter detection.) */
+/* Same detection renderBook uses to gild a chapter's spoken opening in the
+   reader — run once here, directly on the seg.w word objects, so the
+   pop-out can gild them too. buildLyricLines() below buffers those same
+   objects by reference rather than copying them, so a flag set here is
+   still there once a sentence is split into .lw spans. renderBook keeps its
+   own copy of this because it spreads into a fresh flat array every render
+   and reading a mutated seg.w back out would be no simpler than just
+   recomputing it — this is only for the view that has no other route to it. */
+function markHeadWords() {
+  const opensAt = new Map();
+  for (const c of book.chapters) {
+    const i = segs.findIndex(s => s.e > c.t);
+    if (i >= 0 && !opensAt.has(i)) opensAt.set(i, c);
+  }
+  const flat = [];
+  const segStart = [];
+  for (let si = 0; si < segs.length; si++) {
+    const words = segs[si].w && segs[si].w.length ? segs[si].w : [];
+    segStart.push(flat.length);
+    for (const w of words) flat.push(w);
+  }
+  for (const si of opensAt.keys()) {
+    const at = segStart[si];
+    const len = headingLength(flat, at);
+    for (let k = 0; k < len; k++) {
+      flat[at + k].head = true;
+      flat[at + k].headEnd = k === len - 1;
+    }
+  }
+}
+
 function buildLyricLines() {
   lyric = [];
   lyricEls = null;          // sentences changed; the laid-out DOM is stale
@@ -234,6 +271,7 @@ function buildLyricLines() {
 
 function buildPages() {
   segs = splitSegmentsAtChapters(book.segments, book.chapters);
+  markHeadWords();
   let bounds = book.chapters.map(c => c.t);
   if (!bounds.length || bounds[0] > 0.5) bounds.unshift(0);
 
@@ -614,8 +652,11 @@ function renderLyric(t) {
       // only the sentence being read is split into words — the faded
       // neighbours never light up, so spans there would be dead weight
       if (lyric[idx].w)
-        el.innerHTML = lyric[idx].w.map(w =>
-          `<span class="lw" data-s="${w.s}" data-e="${w.e}">${esc(w.w)}</span>`).join("");
+        el.innerHTML = lyric[idx].w.map(w => {
+          const cls = w.head ? " head" + (w.headEnd ? " head-end" : "") : "";
+          const text = w.headEnd ? w.w.replace(/[.,;:]+\s*$/, "") : w.w;
+          return `<span class="lw${cls}" data-s="${w.s}" data-e="${w.e}">${esc(text)}</span>`;
+        }).join("");
       lyricWordEls = [...el.querySelectorAll(".lw")];
     } else {
       lyricWordEls = [];
@@ -673,6 +714,36 @@ window.addEventListener("resize", () => {
   // Fold that is every time the phone is opened or closed
   if (book) fitTickLabels();
 });
+
+/* The on-screen keyboard covering whatever it opens over.
+
+   Android without windowSoftInputMode="adjustResize" just overlays the
+   keyboard on the page rather than shrinking it — fixed since 1.0.10, but
+   the web reader has no manifest to set. iOS Safari never resizes the
+   layout viewport for a keyboard at all, on any setting; that is a
+   permanent WebKit property, not a bug to work around once. visualViewport
+   is the one signal both agree on: its height drops by roughly the
+   keyboard's height wherever one has actually opened, so the body is
+   resized to match it — the same effect adjustResize gets natively, done
+   here for browsers that will not do it themselves. Everything already
+   anchored to "the bottom of the screen" (the transport) or computed
+   against "how tall is the visible area right now" (the note popover)
+   then falls back into what is actually visible.
+
+   120px is comfortably above a URL bar hiding on scroll (40-60px) and
+   comfortably below any real keyboard (200px+), so an ordinary scroll does
+   not trigger this. */
+const vv = window.visualViewport;
+function applyKeyboardInset() {
+  if (!vv) return;
+  const short = vv.height < window.innerHeight - 120;
+  document.body.style.height = short ? `${vv.height}px` : "";
+  positionNotePop();   // a no-op unless the popover is actually open
+}
+if (vv) {
+  vv.addEventListener("resize", applyKeyboardInset);
+  vv.addEventListener("scroll", applyKeyboardInset);
+}
 
 /* ------------------------------------------------------- scroll rail */
 // The native scrollbar is only 16px, too thin to keep a finger on while
@@ -736,7 +807,11 @@ function frame() {
       $("seek").value = Math.floor(t);
     }
     if (compact) {
-      renderLyric(t);
+      // Only while following — renderLyric() recentres the view on every
+      // sentence change, which is exactly the drag-you-back behaviour the
+      // reader avoids by keeping setNow() (word colour only) separate from
+      // scrollToTime() (the thing that actually moves the page).
+      if (follow) renderLyric(t);
     } else {
       const i = wordAt(t);
       if (i !== nowIdx) setNow(i);
@@ -835,13 +910,24 @@ function labelsCollide(pad) {
    one smudged number. Real chapters are not evenly spaced — they bunch — so
    this has to hold for the tightest pair on the bar, not the average. */
 const TICK_GAP = 6;
+// One size down, tried before giving up entirely. A narrow phone folded to
+// its cover screen has a fraction of the track width an unfolded one does —
+// two clock readouts and the thumb inset already claim a fixed chunk of it,
+// so a busy book can run out of room for stagger alone well before it runs
+// out of room altogether. Measured on a 344px-wide cover screen with 20
+// chapters: normal size staggered still collides; dropping to 7px/4px gap
+// does not, on either row. Smaller numbers beat no numbers.
+const TICK_GAP_TIGHT = 4;
 
 function fitTickLabels() {
   const tl = $("timeline");
-  tl.classList.remove("stagger", "dense");
+  tl.classList.remove("stagger", "dense", "tight");
   if (labelsCollide(TICK_GAP)) {
     tl.classList.add("stagger");
-    if (labelsCollide(TICK_GAP)) tl.classList.add("dense");
+    if (labelsCollide(TICK_GAP)) {
+      tl.classList.add("tight");
+      if (labelsCollide(TICK_GAP_TIGHT)) tl.classList.add("dense");
+    }
   }
   // The chapter numbers are absolutely positioned above the track, so they
   // add no height of their own — the transport has to make room for them or
@@ -1450,7 +1536,10 @@ $("btnPop").onclick = $("btnPopExit").onclick = () => {
   $("transport").classList.remove("expanded");   // the reading view opens clean
   $("btnPop").title = compact ? "Back to the full page" : "Reading view";
   lyricIdx = -1;
-  if (compact) renderLyric(audio.currentTime);
+  // Respects whatever you were already looking at rather than snapping to
+  // the live position — opening the pop-out is not itself a request to
+  // follow, any more than scrolling the reader is.
+  if (compact) { lyricIdx = -1; renderLyric(follow ? audio.currentTime : browseT); }
   positionScrollRail();
 };
 
@@ -1558,7 +1647,7 @@ positionJump();
 function showJump(on) {
   const el = $("jumpNow");
   if (!el) return;
-  el.classList.toggle("show", !!(on && book && !compact));
+  el.classList.toggle("show", !!(on && book));
 }
 
 function snapToPlayhead(behavior) {
@@ -1568,7 +1657,8 @@ function snapToPlayhead(behavior) {
   showJump(false);
   browseT = audio.currentTime;
   $("seek").value = Math.floor(browseT);
-  scrollToTime(audio.currentTime, behavior || "smooth");
+  if (compact) { lyricIdx = -1; renderLyric(audio.currentTime); }
+  else scrollToTime(audio.currentTime, behavior || "smooth");
 }
 $("jumpNow").onclick = () => snapToPlayhead();
 
@@ -1737,18 +1827,27 @@ async function saveChapters() {
 
 function openNotePop(mode, rect) {
   notePopMode = mode;
+  notePopRect = rect;
   const pop = $("notePop"), text = $("notePopText");
   text.value = mode.kind === "edit" ? book.notes[mode.idx].text : "";
   $("notePopDelete").hidden = mode.kind !== "edit";
   pop.hidden = false;
-
-  const top = Math.min(window.innerHeight - 170, Math.max(8, rect.bottom + 8));
-  const left = Math.min(window.innerWidth - 296, Math.max(8, rect.left));
-  pop.style.top = `${top}px`;
-  pop.style.left = `${left}px`;
+  positionNotePop();
   text.focus();
 }
-function closeNotePop() { $("notePop").hidden = true; notePopMode = null; }
+/* Split out so a keyboard opening later can ask again against whatever is
+   actually visible now, rather than the position only ever being right at
+   the instant the popover opened — see applyKeyboardInset() above. */
+function positionNotePop() {
+  const pop = $("notePop");
+  if (pop.hidden || !notePopRect) return;
+  const vh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+  const top = Math.min(vh - 170, Math.max(8, notePopRect.bottom + 8));
+  const left = Math.min(window.innerWidth - 296, Math.max(8, notePopRect.left));
+  pop.style.top = `${top}px`;
+  pop.style.left = `${left}px`;
+}
+function closeNotePop() { $("notePop").hidden = true; notePopMode = null; notePopRect = null; }
 
 $("notePopCancel").onclick = closeNotePop;
 $("notePopSave").onclick = async () => {
@@ -1773,14 +1872,44 @@ async function saveNotes(notes) {
   drawTicks();
 }
 
-$("page").addEventListener("mouseup", () => {
-  if (compact) return;
+function noteFromCurrentSelection() {
+  if (compact || !$("notePop").hidden) return;
   const picked = selectedWordRange();
   if (!picked) return;
   const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
   const rect = sel.getRangeAt(0).getBoundingClientRect();
   sel.removeAllRanges();
   openNotePop({ kind: "new", ...picked }, rect);
+}
+
+$("page").addEventListener("mouseup", noteFromCurrentSelection);
+
+/* A mouse reports mouseup at the exact moment a selection finishes, but a
+   touch does not: dragging the little handles that adjust a touch
+   selection fires selectionchange with no mouseup, no touchend and no
+   pointerup at all on some combination of iOS Safari and Android Chrome —
+   documented independently by multiple people trying to solve exactly
+   this, not a guess. selectionchange is the one event both agree on, so
+   this is the actual mobile equivalent of the listener above, not
+   decoration alongside it — without it, selecting a phrase by touch and
+   letting go does nothing until you separately remember the note button.
+
+   Debounced because selectionchange fires on every pixel of the drag, and
+   gated on a finger still being down so it cannot fire the popover open
+   while a handle is mid-drag under the thumb — it only acts once the
+   selection has actually stopped changing. */
+let selDebounce = null, selPointerDown = false;
+$("page").addEventListener("pointerdown", () => { selPointerDown = true; }, { passive: true });
+addEventListener("pointerup", () => {
+  selPointerDown = false;
+  clearTimeout(selDebounce);
+  noteFromCurrentSelection();
+}, { passive: true });
+document.addEventListener("selectionchange", () => {
+  if (compact) return;
+  clearTimeout(selDebounce);
+  selDebounce = setTimeout(() => { if (!selPointerDown) noteFromCurrentSelection(); }, 300);
 });
 
 /* Note what you selected, or note where you are.
@@ -1979,8 +2108,8 @@ function libRowHtml(b) {
           ${b.bookmark != null
             ? `<button class="row-go" data-open-at="${b.id}|bookmark">Bookmark · ${clock(b.bookmark)}</button>`
             : ""}
-          <button class="row-go series-btn" data-series="${b.id}"
-                  title="Group this book into a series">${b.series ? esc(b.series) : "+ Series"}</button>
+          <button class="row-go series-btn${b.series ? "" : " series-btn-empty"}" data-series="${b.id}"
+                  title="Group this book into a series">${b.series ? esc(b.series) : PLUS_ICON}</button>
         </div>
       </div>`;
 }

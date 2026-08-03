@@ -272,6 +272,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 /* the same playhead treatment the reader uses, so the word being spoken
    reads identically in both views */
 .lw{transition:color .18s ease}
+/* .lw.head sits before .lw.now for the same reason .w.head does in the
+   reader — the announcement is briefly both gilded and the word being
+   read, and the playhead colour has to win while that's true. */
+.lw.head{color:var(--gilt);font-weight:600}
+.lw.head-end::after{content:":"}
 .lw.now{
   color:var(--verdigris);
   text-shadow:0 0 6px rgba(95,211,196,.45), 0 0 16px rgba(95,211,196,.25), 0 0 28px rgba(95,211,196,.1);
@@ -418,12 +423,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .timeline.stagger .tick:not(.alt).on::before{background:var(--verdigris)}
 .timeline.stagger .tick:not(.alt):hover .tick-n,
 .timeline.stagger .tick:not(.alt).on .tick-n{color:var(--bone)}
-/* Past the point where even two rows fit, the marks are a picket fence and
-   the numbers are unreadable — drop both and leave a clean scrub bar rather
-   than a smear. Nothing is lost permanently: fitTickLabels() re-measures on
-   every resize, so rotating or unfolding the phone widens the track and
-   brings the chapters straight back. Note ticks stay; there are rarely
-   enough of them to crowd. */
+/* One size down from the normal 9px, tried on a track too narrow for
+   staggered numbers at full size — a folded phone's cover screen mainly.
+   Two clock readouts and the thumb inset already claim a fixed slice of a
+   track that is a fraction as wide as the unfolded screen's, so a busy book
+   can run out of room here well before "dense" is the only option left. */
+.timeline.tight .tick-n{font-size:7px}
+/* Past the point where even that fits, the marks are a picket fence and the
+   numbers are unreadable — drop both and leave a clean scrub bar rather than
+   a smear. Nothing is lost permanently: fitTickLabels() re-measures on every
+   resize, so rotating or unfolding the phone widens the track and brings the
+   chapters straight back. Note ticks stay; there are rarely enough of them
+   to crowd. */
 .timeline.dense .tick:not(.note){display:none}
 
 /* the full label only appears when you reach for it */
@@ -677,16 +688,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 }
 .jump:active{transform:translate(-50%, 1px) scale(.97)}
 
-/* The pop-out has no reader to snap, so the pill has no business floating
-   over it — and it did, because #jumpNow is a sibling of #app rather than a
-   child, so every .app.compact rule in this file misses it. A sibling
-   combinator reaches it; .app.compact ~ .jump (0,3,0) outranks .jump.show
-   (0,2,0), so no !important is needed.
-
-   Hiding in CSS rather than clearing the state in JS is deliberate: follow
-   is still perfectly false while the pop-out is open, so closing it should
-   put the pill back exactly as it was, with nothing to remember. */
-.app.compact ~ .jump{opacity:0;visibility:hidden;pointer-events:none}
+/* The pop-out gets its own use of this pill now: opening it no longer
+   snaps the sentence view to the live position, so if you had already
+   browsed ahead in the reader, the pop-out shows that same spot and offers
+   the same way back. It used to be force-hidden here — #jumpNow is a
+   sibling of #app rather than a child, so a plain .app.compact rule can't
+   reach it, which is exactly why a sibling combinator was the fix the one
+   time this really did need hiding (see the git history on this rule if
+   that regresses: the pop-out force-recentring on every entry and on every
+   frame is what made the pill meaningless there before). */
 .jump svg{flex:0 0 auto}
 @media (prefers-reduced-motion:reduce){
   .jump,.jump.show{transition:opacity .15s ease}
@@ -848,7 +858,24 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .app.compact .bar-tools{display:none}
 .app.compact h1{font-size:17px;font-weight:600}
 .app.compact .bar-sub{font-size:10px;margin-top:2px}
-.app.compact .reader{display:none}
+/* content-visibility:hidden, not display:none. Measured on the real
+   91,788-word book (1135 segments): plain display:none costs ~8-10ms to
+   hide and ~8-9ms to show again, every single time, because it destroys
+   and rebuilds the render tree for the whole subtree — content-visibility
+   already skips exactly that for off-screen .seg paragraphs, but a
+   display:none ancestor bypasses that optimisation outright. Switching to
+   content-visibility:hidden (which skips rendering the same way but keeps
+   the subtree's internal state) measured ~4.5ms / ~7ms instead, a real cut
+   even though it does not vanish outright. flex:0 0 0 plus a collapsed
+   height is still needed alongside it — content-visibility:hidden does not
+   remove the box from flow the way display:none does, so without this the
+   reader would go on claiming half the flex row while showing nothing in
+   it. Unverified whether this is enough on the actual hardware it was
+   reported slow on — a tablet, not tested here — since the Browser pane
+   cannot show real dropped frames, only the JavaScript-side cost. */
+.app.compact .reader{
+  content-visibility:hidden;height:0;flex:0 0 0;overflow:hidden;
+}
 .app.compact .lyric{display:block}
 .app.compact #btnPop{display:none}       /* Close at the top replaces it */
 .app.compact .tick-n{display:none}
