@@ -724,10 +724,16 @@ window.addEventListener("resize", () => {
    is the one signal both agree on: its height drops by roughly the
    keyboard's height wherever one has actually opened, so the body is
    resized to match it — the same effect adjustResize gets natively, done
-   here for browsers that will not do it themselves. Everything already
-   anchored to "the bottom of the screen" (the transport) or computed
-   against "how tall is the visible area right now" (the note popover)
-   then falls back into what is actually visible.
+   here for browsers that will not do it themselves.
+
+   The note popover and the typed-timecode clock used to be repositioned
+   from here too, computed against "how tall is the visible area right
+   now." That depended on visualViewport actually shrinking when the
+   keyboard opened, and on a real device (Google's keyboard specifically)
+   it didn't hold — still reported covered, still off-centre. Both are
+   pinned near the *top* of the screen now (see their own CSS), which needs
+   no information about the keyboard at all, so there is nothing left for
+   this function to recompute for them.
 
    120px is comfortably above a URL bar hiding on scroll (40-60px) and
    comfortably below any real keyboard (200px+), so an ordinary scroll does
@@ -737,8 +743,6 @@ function applyKeyboardInset() {
   if (!vv) return;
   const short = vv.height < window.innerHeight - 120;
   document.body.style.height = short ? `${vv.height}px` : "";
-  positionNotePop();    // a no-op unless the popover is actually open
-  positionClockEdit();  // ditto for the typed-timecode edit
 }
 if (vv) {
   vv.addEventListener("resize", applyKeyboardInset);
@@ -1276,39 +1280,27 @@ audio.addEventListener("seeked", pushMediaState);
 
 /* Tap the elapsed clock to type a timecode — h:mm:ss, m:ss or plain
    seconds. Edited in place, the same way chapter names and the title are. */
+/* Editing in place put the field right where the transport bar sits, at
+   the bottom of the screen — exactly what an on-screen keyboard covers
+   first. .clock-editing pins it near the top instead (see its CSS); a
+   prior version computed a centred position from visualViewport here,
+   which needed the keyboard to actually shrink that value to hold, and on
+   a real device it didn't. Top-anchoring needs nothing computed. */
 $("clockNow").onclick = () => {
   if (!book || editingClock) return;
   editingClock = true;
   const el = $("clockNow");
   el.contentEditable = "true";
   el.classList.add("clock-editing");
-  positionClockEdit();
   el.focus();
   document.getSelection().selectAllChildren(el);
 };
-/* Editing in place put the field right where the transport bar sits, at
-   the bottom of the screen — exactly what an on-screen keyboard covers
-   first. Floating it to the centre of whatever visualViewport currently
-   reports as visible (same reasoning as positionNotePop() above) keeps it
-   clear of the keyboard without having to guess its height. */
-function positionClockEdit() {
-  const el = $("clockNow");
-  if (!el.classList.contains("clock-editing")) return;
-  const vw = (vv && vv.width) || window.innerWidth;
-  const vh = (vv && vv.height) || window.innerHeight;
-  const ox = (vv && vv.offsetLeft) || 0;
-  const oy = (vv && vv.offsetTop) || 0;
-  const r = el.getBoundingClientRect();
-  el.style.left = `${ox + (vw - r.width) / 2}px`;
-  el.style.top = `${oy + (vh - r.height) / 2}px`;
-}
 function commitClock(cancel) {
   if (!editingClock) return;          // committed already, or never started
   const el = $("clockNow");
   editingClock = false;
   el.contentEditable = "false";
   el.classList.remove("clock-editing");
-  el.style.left = ""; el.style.top = "";
   if (cancel) return playUi();
   const parts = el.textContent.trim().split(":").map(x => parseInt(x, 10));
   if (parts.length && parts.length <= 3 && parts.every(n => Number.isFinite(n))) {
@@ -1845,35 +1837,20 @@ async function saveChapters() {
 
 /* ------------------------------------------------------------------ notes */
 
+/* Pinned near the top of the screen in CSS (see .note-pop) rather than
+   positioned from here. A prior version centred it against whatever
+   visualViewport reported as visible, which needed the keyboard to
+   actually shrink that value to work — on a real device (Google's
+   keyboard) it didn't, and the popover came back still covered, still
+   off-centre. Top-anchoring needs no keyboard information at all, so
+   there's nothing left to compute per-open. */
 function openNotePop(mode) {
   notePopMode = mode;
   const pop = $("notePop"), text = $("notePopText");
   text.value = mode.kind === "edit" ? book.notes[mode.idx].text : "";
   $("notePopDelete").hidden = mode.kind !== "edit";
   pop.hidden = false;
-  positionNotePop();
   text.focus();
-}
-/* Centered in whatever visualViewport currently reports as visible, not
-   anchored near the selection. Anchoring below the selection and clamping
-   against an assumed keyboard height read as "still off" depending on
-   which keyboard app was open — Google's and Samsung's report the visible
-   area differently enough that a fixed clamp couldn't cover both. Centering
-   only needs the *total* visible height, which every keyboard shrinks
-   visualViewport to correctly, so it holds regardless of which one opened
-   it. Split out so a keyboard opening later can ask again against whatever
-   is actually visible now, rather than the position only ever being right
-   at the instant the popover opened — see applyKeyboardInset() above. */
-function positionNotePop() {
-  const pop = $("notePop");
-  if (pop.hidden) return;
-  const vw = (vv && vv.width) || window.innerWidth;
-  const vh = (vv && vv.height) || window.innerHeight;
-  const ox = (vv && vv.offsetLeft) || 0;
-  const oy = (vv && vv.offsetTop) || 0;
-  const r = pop.getBoundingClientRect();
-  pop.style.left = `${ox + (vw - r.width) / 2}px`;
-  pop.style.top = `${oy + (vh - r.height) / 2}px`;
 }
 function closeNotePop() { $("notePop").hidden = true; notePopMode = null; }
 
