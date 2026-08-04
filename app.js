@@ -2164,6 +2164,21 @@ function renderLibrary() {
   wireLibrary();
 }
 
+/* The suggestion list a series <input> offers, rebuilt from whatever
+   series already exist in the library rather than kept as its own list —
+   there's nothing here to fall out of sync with, since it's a name every
+   book already carries a copy of. Created once and refreshed in place. */
+function refreshSeriesOptions() {
+  let list = document.getElementById("seriesOptions");
+  if (!list) {
+    list = document.createElement("datalist");
+    list.id = "seriesOptions";
+    document.body.appendChild(list);
+  }
+  const names = [...new Set(libraryItems.map(b => b.series).filter(Boolean))].sort();
+  list.innerHTML = names.map(n => `<option value="${esc(n)}">`).join("");
+}
+
 function wireLibrary() {
   const body = $("libList");
 
@@ -2213,9 +2228,6 @@ function wireLibrary() {
     };
   });
 
-  /* Typed in place, the same way chapter names and the book title are — no
-     dialog, no list of series to maintain, and clearing the text takes the
-     book back out of its group. */
   /* Keeping a copy. Offered per book rather than done for you: it is
      hundreds of megabytes, and it is the reader's disk. On Safari there are
      no file handles to remember, so this is the only way a book opens on a
@@ -2252,29 +2264,37 @@ function wireLibrary() {
     btn.disabled = false;
   });
 
+  /* No dialog and no separate list of series to maintain by hand. It is
+     still a plain text field (typing a new name still makes a new series,
+     clearing it still takes the book out), but it is an <input> with a
+     native <datalist> of every series already in the library, so putting
+     a second book into a series you already made means picking it rather
+     than retyping it and risking a typo that quietly splits it into two. */
+  refreshSeriesOptions();
   body.querySelectorAll("[data-series]").forEach(btn => btn.onclick = async e => {
     e.stopPropagation();
     const id = btn.dataset.series;
     const cur = (libraryItems.find(b => b.id === id) || {}).series || "";
-    btn.classList.add("editing");
-    btn.textContent = cur;
-    btn.contentEditable = "true";
-    btn.focus();
-    document.getSelection().selectAllChildren(btn);
+    const input = document.createElement("input");
+    input.className = "row-go series-btn editing";
+    input.setAttribute("list", "seriesOptions");
+    input.maxLength = 120;
+    input.value = cur;
+    btn.replaceWith(input);
+    input.focus();
+    input.select();
     const commit = async save => {
-      btn.contentEditable = "false";
-      btn.classList.remove("editing");
-      const name = btn.textContent.trim().slice(0, 120);
+      const name = input.value.trim().slice(0, 120);
       if (!save || name === cur) return renderLibrary();
       const r = await api(`/api/series/${id}`, { series: name });
       const item = libraryItems.find(b => b.id === id);
       if (item) item.series = r.series;
       renderLibrary();
     };
-    btn.onblur = () => commit(true);
-    btn.onkeydown = ev => {
-      if (ev.key === "Enter") { ev.preventDefault(); btn.blur(); }
-      if (ev.key === "Escape") { ev.preventDefault(); btn.onblur = null; commit(false); }
+    input.onblur = () => commit(true);
+    input.onkeydown = ev => {
+      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+      if (ev.key === "Escape") { ev.preventDefault(); input.onblur = null; commit(false); }
     };
   });
 

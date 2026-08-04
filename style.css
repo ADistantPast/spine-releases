@@ -602,6 +602,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .series-btn.editing{
   border-color:var(--verdigris);color:var(--bone);outline:none;
   min-width:80px;text-align:left;
+  /* editing swaps the button for a real <input> (needs one for its
+     datalist), which unlike a button does not inherit a blank background
+     and inherited font from the page's own reset */
+  background:none;font:inherit;
 }
 
 .hit-row{cursor:pointer}
