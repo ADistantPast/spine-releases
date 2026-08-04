@@ -537,7 +537,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .lib-head .trash.danger{
   border-color:var(--oxide);background:rgba(192,103,74,.18);color:var(--bone);
 }
-.lib-actions{display:flex;gap:6px;margin-top:4px;justify-content:flex-end}
+/* position:relative is the anchor for the series editor, which is taken out
+   of this row's flow so opening it doesn't shove the buttons — see
+   .series-btn.editing below */
+.lib-actions{display:flex;gap:6px;margin-top:4px;justify-content:flex-end;position:relative}
 .lib-actions .row-go{
   opacity:1;flex:0 0 auto;border:1px solid var(--hair);border-radius:6px;
   padding:0 8px;min-height:23px;font-family:var(--ui);font-size:11px;
@@ -599,13 +602,33 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 
 .series-btn{color:var(--dust)}
 .series-btn:hover{border-color:var(--moss);color:var(--moss)}
+/* Editing swaps the button for a real <input>, which is what a datalist
+   needs to attach to. Two things that has to be told, both of which read
+   as "the UI went wrong" if they are missed:
+
+   It is taken out of the flex flow. An input's intrinsic width comes from
+   its size attribute — 20 characters, ~190px — where the plus glyph it
+   replaces is 30px, and .lib-actions is right-aligned with
+   flex:0 0 auto children, so in flow it shunts every other button in the
+   row sideways. Absolutely positioned against the row it changes no
+   layout at all, and covering the neighbours while you type is the right
+   behaviour anyway: the trash sits in that row.
+
+   And it must NOT be given font:inherit. That looks like the safe way to
+   undo the UA stylesheet's font, but the shorthand resets font-size too,
+   to the inherited 16px — in a row of 11px buttons. Naming nothing lets
+   .lib-actions .row-go's own font-family and font-size apply, which is
+   what makes it match its neighbours exactly. Only the background needs
+   overriding, since a UA input is opaque. */
+/* the button the editor floats over: still in the row, still holding its
+   width, just not drawn (visibility, not display — display:none would give
+   its space back and the row would shift) */
+.series-btn.editing-src{visibility:hidden}
 .series-btn.editing{
+  position:absolute;right:0;top:0;z-index:3;
+  width:132px;text-align:left;
   border-color:var(--verdigris);color:var(--bone);outline:none;
-  min-width:80px;text-align:left;
-  /* editing swaps the button for a real <input> (needs one for its
-     datalist), which unlike a button does not inherit a blank background
-     and inherited font from the page's own reset */
-  background:none;font:inherit;
+  background:var(--slab-2);
 }
 
 .hit-row{cursor:pointer}

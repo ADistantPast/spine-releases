@@ -2280,10 +2280,23 @@ function wireLibrary() {
     input.setAttribute("list", "seriesOptions");
     input.maxLength = 120;
     input.value = cur;
-    btn.replaceWith(input);
+    /* The button stays in the row, holding its own space, and is only made
+       invisible — the editor floats over it (see .series-btn.editing).
+       Replacing it outright removed its width from a right-aligned row, so
+       every other button slid sideways to take up the slack. */
+    btn.classList.add("editing-src");
+    btn.after(input);
     input.focus();
     input.select();
+    /* The row's own click opens the book. The button this replaced carried
+       the stopPropagation itself, so editing was safe; a fresh <input> has
+       no handler, and without this, clicking the field — or its datalist
+       arrow — loads the book and shuts the drawer mid-edit. */
+    input.onclick = ev => ev.stopPropagation();
+    let done = false;   // change fires on a datalist pick *and* again on blur
     const commit = async save => {
+      if (done) return;
+      done = true;
       const name = input.value.trim().slice(0, 120);
       if (!save || name === cur) return renderLibrary();
       const r = await api(`/api/series/${id}`, { series: name });
@@ -2291,10 +2304,17 @@ function wireLibrary() {
       if (item) item.series = r.series;
       renderLibrary();
     };
+    // picking from the dropdown is a finished answer, and it fires change
+    // rather than blur — without this the pick just sits there looking unsaved
+    input.onchange = () => commit(true);
     input.onblur = () => commit(true);
     input.onkeydown = ev => {
       if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
-      if (ev.key === "Escape") { ev.preventDefault(); input.onblur = null; commit(false); }
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        input.onblur = input.onchange = null;
+        commit(false);
+      }
     };
   });
 
