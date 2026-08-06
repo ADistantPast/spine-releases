@@ -1768,8 +1768,15 @@ function snapToPlayhead(behavior) {
   showJump(false);
   browseT = audio.currentTime;
   $("seek").value = Math.floor(browseT);
-  if (compact) renderLyric(audio.currentTime, true);
-  else scrollToTime(audio.currentTime, behavior || "smooth");
+  if (compact) { renderLyric(audio.currentTime, true); return; }
+  /* Back on the page: scroll AND move the lit word. scrollToTime works out
+     which word it is only to know what to scroll to — it never touches the
+     highlight, so on its own this left whichever word was lit before still
+     lit. While playing the frame loop corrects that within about 16ms and you
+     never see it; while paused nothing does, and the wrong word just sits
+     there. Same order playFrom() uses: scroll, then light. */
+  scrollToTime(audio.currentTime, behavior || "smooth");
+  setNow(wordAt(audio.currentTime));
 }
 $("jumpNow").onclick = () => snapToPlayhead();
 
