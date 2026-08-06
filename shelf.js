@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.17";
+  const WEB_VERSION = "1.0.21";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -452,6 +452,7 @@
             duration: b.duration || 0, position: b.position || 0,
             bookmark: b.bookmark == null ? null : b.bookmark,
             chapters: (b.chapters || []).length,
+            status: b.status || "",
             missing: !hasAudio(b.id),      // known, but its audio is not here
             kept: !!b._kept,               // a copy lives on this device
             updated: b.updated || 0,
@@ -475,7 +476,8 @@
         return { ok: true };
 
       case "chapters": case "notes": case "position":
-      case "bookmark": case "offset": case "title": case "series": {
+      case "bookmark": case "offset": case "title": case "series":
+      case "status": {
         if (!post) return { error: "Nothing sent." };
         const b = await getBook(rest);
         if (!b) return { error: "That book is not on this device." };
@@ -483,6 +485,12 @@
         else if (head === "notes") b.notes = body.notes || [];
         else if (head === "title") b.title = (body.title || "").trim() || b.title;
         else if (head === "series") b.series = (body.series || "").trim();
+        else if (head === "status") {
+          /* Anything unrecognised clears it — "no label" is the ordinary
+             state, and the same rule set_status() applies in app.py. */
+          const want = (body.status || "").trim().toLowerCase();
+          b.status = ["reading","paused","completed","dropped"].includes(want) ? want : "";
+        }
         else b[head] = body.t;          // position, bookmark, offset
         b.updated = Date.now() / 1000;
         await putBook(b);
@@ -490,6 +498,7 @@
              : head === "notes" ? { notes: b.notes }
              : head === "title" ? { title: b.title }
              : head === "series" ? { series: b.series }
+             : head === "status" ? { status: b.status }
              : { [head]: b[head] };
       }
     }

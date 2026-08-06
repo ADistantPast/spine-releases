@@ -582,6 +582,63 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .lib-find input::placeholder{color:var(--dust)}
 .lib-find input:focus{outline:none;border-color:var(--verdigris)}
 
+/* Sort, and the one line telling you the shelf can be rearranged — the only
+   hint that it can, since a grab handle on every row would be more furniture
+   than the feature is worth. Two lines, because the gesture is not the same
+   one on the two inputs: the complementary pair of media queries the rest of
+   the layout already uses picks between them. */
+.lib-sort{
+  display:flex;align-items:center;gap:8px;
+  padding:0 10px 10px;font-size:11px;color:var(--dust);
+}
+.lib-sort select{
+  background:var(--ink-2);border:1px solid var(--hair);border-radius:6px;
+  color:var(--bone);font-family:var(--ui);font-size:11px;padding:3px 6px;
+}
+.lib-sort select:focus{outline:none;border-color:var(--verdigris)}
+.lib-sort-hint{
+  margin-left:auto;text-align:right;opacity:.72;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.lib-sort-hint.fine{display:none}
+
+/* Where a book would land. The insertion line is an inset shadow rather than
+   a real border so nothing moves as it follows the finger down the list — a
+   2px border would shove every row below it by 2px on every move, and a
+   drag reports a move continuously. */
+.lib-row.dragging{opacity:.4}                                 /* mouse drag */
+.lib-row.drop-above{box-shadow:inset 0 2px 0 var(--verdigris)}
+.lib-row.drop-below{box-shadow:inset 0 -2px 0 var(--verdigris)}
+.series-head.drop-into{
+  background:rgba(95,211,196,.12);border-radius:6px;
+  box-shadow:inset 0 0 0 1px rgba(95,211,196,.5);
+}
+
+/* A press and hold on a row is the grab gesture, so the browser must not also
+   read it as "select this text", and must not open its own callout over it.
+   touch-action:pan-y leaves the vertical scroll — which has to keep working
+   until the hold arms — and takes away the horizontal pan and the
+   double-tap-zoom the gesture has no use for. The title still has to be
+   selectable while it is actually being renamed. */
+.lib-row{
+  touch-action:pan-y;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+}
+.lib-row [contenteditable="true"],.lib-row input{
+  -webkit-user-select:text;user-select:text;
+}
+
+/* A book picked up by hand. It stays in the list rather than being cloned
+   into a floating layer — one element under the finger, and the gap it leaves
+   behind is where "put it back" is. pointer-events:none is load-bearing:
+   elementFromPoint has to see the row underneath the finger, not the one
+   being carried. */
+.lib-row.lifting{
+  position:relative;z-index:4;pointer-events:none;
+  background:var(--slab-2);border-radius:6px;
+  box-shadow:0 10px 22px rgba(0,0,0,.45),inset 0 0 0 1px rgba(95,211,196,.45);
+}
+
 /* A series folds a run of books into one line. The header is a button rather
    than a row so the whole strip is the hit target — these get collapsed and
    expanded constantly and a small caret would be a poor thing to aim at. */
@@ -599,6 +656,30 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 }
 /* indented so the books read as belonging to the series above them */
 .series-books{padding-left:14px;border-left:1px solid var(--hair);margin-left:14px}
+
+/* Where you are with a book. Only Completed takes a colour — it is the one
+   you scan a shelf for, and giving all four a colour would make the row a
+   set of traffic lights. The rest read as ordinary buttons, and an
+   unlabelled book says "Status" in the same grey as its neighbours. */
+.status-btn{color:var(--dust)}
+.status-btn.on{color:var(--bone)}
+.status-btn.s-completed{color:var(--verdigris);border-color:rgba(95,211,196,.45)}
+.status-btn:hover{border-color:var(--verdigris);color:var(--bone)}
+
+/* position:fixed and placed from JS against the button, so the drawer
+   scrolling underneath cannot strand it halfway up the list */
+.status-menu{
+  position:fixed;z-index:40;display:flex;flex-direction:column;min-width:132px;
+  background:var(--slab-2);border:1px solid var(--hair);border-radius:8px;
+  padding:4px;box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+.status-opt{
+  text-align:left;padding:6px 10px;border-radius:5px;
+  font-family:var(--ui);font-size:12px;color:var(--dust);
+}
+.status-opt:hover{background:var(--ink-2);color:var(--bone)}
+.status-opt.on{color:var(--bone)}
+.status-opt.s-completed{color:var(--verdigris)}
 
 .series-btn{color:var(--dust)}
 .series-btn:hover{border-color:var(--moss);color:var(--moss)}
@@ -635,11 +716,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .hit-row .row-n{white-space:normal;font-family:var(--read);font-size:14px;line-height:1.5}
 .hit-row mark{background:rgba(95,211,196,.24);color:var(--bone);border-radius:4px}
 .row-check{flex:0 0 auto;width:15px;height:15px;accent-color:var(--verdigris)}
+/* An inline-flex box now that the glyph is an svg rather than an emoji —
+   without it the icon sits on the text baseline and rides high against the
+   row's other controls. */
 .row-eye{
-  flex:0 0 auto;font-size:13px;padding:3px 4px;opacity:.85;
-  transition:opacity .12s ease;
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  padding:3px 4px;opacity:.85;color:var(--dust);
+  transition:opacity .12s ease,color .12s ease;
 }
-.row-eye.off{opacity:.3}
+.row-eye:hover{color:var(--bone);opacity:1}
+/* dimmer *and* struck through: at this size one or the other alone reads as
+   a rendering accident rather than a state */
+.row-eye.off{opacity:.45}
 
 /* ---------------------------------------------------------- working */
 
@@ -701,7 +789,9 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .jump{
   position:fixed;left:50%;bottom:128px;z-index:35;
   display:flex;align-items:center;gap:8px;
-  padding:9px 16px 9px 13px;
+  /* even now the arrow is gone — the left inset used to be 3px tighter to
+     sit the glyph closer to the edge than the words needed */
+  padding:9px 16px;
   font-family:var(--ui);font-size:12.5px;font-weight:600;letter-spacing:.01em;
   color:#0A1416;background:var(--verdigris);
   border:0;border-radius:40% 40% 40% 40% / 50% 50% 50% 50%;
@@ -944,6 +1034,9 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   .app.compact .lyric-lines{--lyric-now:clamp(18px,3vw,34px)}
   .app.compact .tp{min-width:34px;height:32px;font-size:11px}
   .app.compact .tp.play{width:40px;font-size:12px}
+  /* a mouse drags; it does not hold */
+  .lib-sort-hint.fine{display:block}
+  .lib-sort-hint.coarse{display:none}
 }
 
 /* The phone layout, chosen by input rather than only by width.
@@ -961,6 +1054,12 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   /* clears the status bar, and the notch when the phone is sideways */
   .bar{flex-direction:column;align-items:stretch;gap:12px;
     padding:calc(20px + var(--safe-t)) calc(22px + var(--safe-r)) 16px calc(22px + var(--safe-l))}
+  /* Thumb-sized, matching .lib-actions .row-go below. The hint takes its own
+     line: measured at 375px it was ellipsised down to "Hold a bo…" sharing
+     one with the select. */
+  .lib-sort{flex-wrap:wrap;row-gap:6px}
+  .lib-sort select{min-height:34px;font-size:12.5px;padding:0 8px}
+  .lib-sort-hint.coarse{flex:1 0 100%;margin-left:0;text-align:left}
   /* Library rows carry up to four buttons; on a narrow drawer they'd
      otherwise be squeezed to hairlines. Wrap them and give each a real
      thumb-sized target. */

@@ -44,6 +44,17 @@ const TRASH_ICON =
 const PLUS_ICON =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5 V19 M5 12 H19" /></svg>';
 
+// Shown or hidden on the timeline. Line art at the same 24px viewBox and
+// stroke weight as every other icon here, rather than the emoji that was
+// standing in — an emoji renders as a full-colour glyph from the system font,
+// which is the one thing in this row that never matched the palette. The
+// hidden state gets its own struck-through eye rather than only being dimmer,
+// since "faint" and "off" are hard to tell apart at 13px.
+const EYE_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 12 C6 7.2 18 7.2 21.4 12 C18 16.8 6 16.8 2.6 12 Z" /><circle cx="12" cy="12" r="2.5" /></svg>';
+const EYE_OFF_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 12 C6 7.2 18 7.2 21.4 12 C18 16.8 6 16.8 2.6 12 Z" /><circle cx="12" cy="12" r="2.5" /><path d="M4 20 L20 4" /></svg>';
+
 const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
 /* A tick you can feel. "tick" for one chapter crossed, "arm" when a
@@ -100,6 +111,10 @@ async function loadBook(id, startAt = "last") {
      onerror — which reports "this file will not play". So a book waiting for
      its audio accused itself of being corrupt, and the honest message
      underneath it never got a word in. */
+  /* Swapping src silently sets paused = true and fires no pause event, so
+     nothing else here would notice the last book stopping. */
+  wantPlaying = false;
+  syncPlayButton();
   const src = SpineLocal.audioUrl(id);
   if (src) {
     audio.src = src;
@@ -160,10 +175,13 @@ async function loadBook(id, startAt = "last") {
    from a saved position sat at 0:00:00 while the text was correctly lit at
    the real place. Remember the intended moment and apply it the instant the
    metadata lands. */
-let pendingStart = null;
+let pendingStart = null, pendingPlay = false;
 
-function seekWhenReady(t) {
+function seekWhenReady(t, resume = false) {
   pendingStart = t;
+  /* Assigned, never OR-ed: opening another book must clear a resume the
+     last one left behind. */
+  pendingPlay = resume;
   if (audio.readyState >= 1) applyPendingStart();   // already loaded: now
 }
 
@@ -177,6 +195,11 @@ function applyPendingStart() {
   // while the book sits paused at the place it reopened to
   $("seek").value = Math.floor(t);
   playUi();
+  /* A reload that interrupted playback carries on by itself — see
+     audio.onerror. Done here rather than beside the src assignment so the
+     sound starts at the restored position, not at 0. */
+  reloading = false;
+  if (pendingPlay) { pendingPlay = false; startPlaying(); }
 }
 audio.addEventListener("loadedmetadata", applyPendingStart);
 
@@ -1246,8 +1269,8 @@ function positionPlayMark() {
    The page stays the single source of truth for the playhead: these push
    state out, and SpineMedia below takes commands back in. */
 window.SpineMedia = {
-  play: () => audio.play(),
-  pause: () => audio.pause(),
+  play: () => startPlaying(),
+  pause: () => stopPlaying(),
   nextChapter: () => $("nextCh").click(),
   prevChapter: () => $("prevCh").click(),
   forward: () => playFrom(audio.currentTime + 30),
@@ -1321,12 +1344,62 @@ $("clockNow").onblur = () => commitClock(false);
 /* Play is the one button that gets a haptic. The rest don't: a tick under
    every tap stops meaning anything, and this is the press you make without
    looking. */
+/* What the reader asked for, which is not the same as what the element is
+   doing. Assigning audio.src runs the media load algorithm, which sets
+   audio.paused to true and rejects any pending play() — and fires NO pause
+   event. So the element cannot answer "did they want this playing?" across a
+   reload, and a button that reads audio.paused goes on showing the pause
+   glyph over a silent book. Measured on the web reader: press play into a
+   restarted service worker's 503 and the press is eaten whole, which is the
+   "I have to unpause twice". */
+let wantPlaying = false;
+/* True from the moment a recovery reassigns audio.src until the new
+   source is ready. Reassigning src fires a pause, and by then the UA has
+   already cleared audio.error — so 'are we mid-reload?' cannot be
+   inferred from the element and has to be stated. Measured: without
+   this, onpause clears the intent and the resume never happens. */
+let reloading = false;
+
+function syncPlayButton() {
+  $("playPause").textContent = wantPlaying ? "❚❚" : "▶";
+}
+
+function startPlaying() {
+  wantPlaying = true;
+  syncPlayButton();
+  const p = audio.play();
+  /* play() rejects, and unhandled it reaches nothing but the console.
+     AbortError is our own reload (or a pause) taking the source out from
+     under it — expected, and already has a plan. Anything else means the
+     press did not take, so the button must stop claiming otherwise. */
+  if (p && p.catch) p.catch(err => {
+    /* AbortError: our own reload took the source out from under it.
+       NotSupportedError: the source failed to load — which the audio error
+       handler is already recovering from, and which clears the intent itself
+       if it runs out of retries. Clearing here instead would throw the press
+       away before the recovery could carry it, which is the whole bug.
+       Anything else — an autoplay refusal, say — genuinely did not take. */
+    if (err.name === "AbortError" || err.name === "NotSupportedError") return;
+    wantPlaying = false;
+    syncPlayButton();
+  });
+}
+
+function stopPlaying() {
+  wantPlaying = false;
+  syncPlayButton();
+  audio.pause();
+}
+
 $("playPause").onclick = () => {
   haptic("press");
-  audio.paused ? audio.play() : audio.pause();
+  /* Reads the intent, not audio.paused: a press while a play() is still in
+     flight is "stop", not a second play() stacked on the first. */
+  wantPlaying ? stopPlaying() : startPlaying();
 };
 audio.onplay = () => {
-  $("playPause").textContent = "❚❚";
+  wantPlaying = true;
+  syncPlayButton();
   /* Play does not drag the view back. It is a request to hear this, not a
      request to stop reading whatever you had scrolled off to — and with the
      bar browsing rather than seeking, being somewhere else is an ordinary
@@ -1340,7 +1413,12 @@ audio.onplay = () => {
   }
   startSaving();
 };
-audio.onpause = () => { $("playPause").textContent = "▶"; playUi(); stopSaving(); savePosition(); };
+audio.onpause = () => {
+  /* Not while a reload is in flight: that pause is ours, and letting it
+     erase the intent is exactly how the resume goes silent. */
+  if (!reloading && !audio.error) { wantPlaying = false; syncPlayButton(); }
+  playUi(); stopSaving(); savePosition();
+};
 /* Two things can go wrong here that are not the file's fault, so the reader
    works through them before accusing it of anything.
 
@@ -1365,12 +1443,22 @@ audio.onerror = () => {
     // A failed load resets the element, so the place to come back to is the
     // last one saved rather than whatever currentTime reads now.
     const at = audio.currentTime || book.position || 0;
+    /* Assigning src runs the load algorithm, which sets paused = true and
+       rejects the pending play() without firing pause — nothing here would
+       ever see playback stop. Carry the intent across the reload; without it
+       the press that met the 503 is eaten and you press play a second
+       time. */
+    const resume = wantPlaying;
+    reloading = true;      // before src: the pause it fires is ours
     audio.src = src;
-    seekWhenReady(at);
+    seekWhenReady(at, resume);
     return true;
   };
   if (audioRetry === 0 && SpineLocal.reoffer && SpineLocal.reoffer(book.id) && again()) return;
   if (audioRetry <= 1 && again("direct")) return;
+  reloading = false;
+  wantPlaying = false;
+  syncPlayButton();
   toast("This file will not play. It may be a format the player cannot decode.");
 };
 
@@ -1548,10 +1636,17 @@ $("btnPop").onclick = $("btnPopExit").onclick = () => {
   $("transport").classList.remove("expanded");   // the reading view opens clean
   $("btnPop").title = compact ? "Back to the full page" : "Reading view";
   lyricIdx = -1;
-  // Respects whatever you were already looking at rather than snapping to
-  // the live position — opening the pop-out is not itself a request to
-  // follow, any more than scrolling the reader is.
-  if (compact) { lyricIdx = -1; renderLyric(follow ? audio.currentTime : browseT); }
+  /* Both directions snap to the playhead, on the owner's explicit call —
+     this used to carry whatever you had browsed ahead to across the switch.
+
+     It also fixes a real bug rather than only changing a preference: going
+     the other way, back to the page, used to do nothing at all here. While
+     paused the highlight loop is not running, so the reader kept whichever
+     word was lit when you left it, and the lit word and the playhead
+     disagreed until something else happened to repaint. That is the
+     "sometimes it doesn't update" — it was every time you left the reading
+     view paused, and never when playing. */
+  snapToPlayhead("instant");
   positionScrollRail();
 };
 
@@ -1994,7 +2089,7 @@ function openChapters(focusT) {
       const onTimeline = !/^(start|end)$/i.test(c.name);
       const eye = onTimeline
         ? `<button class="row-eye${hiddenChapters.has(c.t) ? " off" : ""}"
-             data-eye="${c.t}" title="Show or hide this on the timeline">👁</button>`
+             data-eye="${c.t}" title="Show or hide this on the timeline">${hiddenChapters.has(c.t) ? EYE_OFF_ICON : EYE_ICON}</button>`
         : "";
       return `
       <div class="row${c.auto ? "" : " mine"}" data-k="${k}">
@@ -2061,7 +2156,7 @@ function openNotes() {
   body.innerHTML = book.notes.map((n, k) => `
     <div class="row" data-k="${k}">
       <button class="row-eye${hiddenNotes.has(n.s) ? " off" : ""}"
-        data-eye="${n.s}" title="Show or hide this on the timeline">👁</button>
+        data-eye="${n.s}" title="Show or hide this on the timeline">${hiddenNotes.has(n.s) ? EYE_OFF_ICON : EYE_ICON}</button>
       <span class="row-t">${clock(n.s)}</span>
       <span class="row-n">${esc(n.text)}</span>
       <button class="row-go" data-go="${n.s}">go</button>
@@ -2091,8 +2186,90 @@ const SERIES_SHUT = "spine.shutSeries";
 const shutSeries = () => new Set(JSON.parse(localStorage.getItem(SERIES_SHUT) || "[]"));
 const setShut = set => localStorage.setItem(SERIES_SHUT, JSON.stringify([...set]));
 
+/* How the shelf is sorted, and — when it is sorted by hand — the order it was
+   put in. Both live in localStorage for the same reason the folded-shut set
+   above does: this is how you like looking at your own shelf on this device.
+   Deliberately not in the book files, so nothing new travels in a bundle and
+   this device's arrangement stays this device's. */
+const LIB_SORT = "spine.libSort";
+const LIB_ORDER = "spine.bookOrder";
+const libSort = () => localStorage.getItem(LIB_SORT) || "recent";
+const setLibSort = m => localStorage.setItem(LIB_SORT, m);
+const libOrder = () => {
+  try { return JSON.parse(localStorage.getItem(LIB_ORDER) || "[]"); } catch (e) { return []; }
+};
+const setLibOrder = ids => localStorage.setItem(LIB_ORDER, JSON.stringify(ids));
+
+/* /api/library already arrives most-recently-played first, so "recent" is
+   simply the order it came in and needs no work. */
+function sortLibrary(items) {
+  const mode = libSort();
+  if (mode === "title")
+    // numeric so "Book 2" sorts before "Book 10" rather than after it
+    return [...items].sort((a, b) => (a.title || "").localeCompare(
+      b.title || "", undefined, { numeric: true, sensitivity: "base" }));
+  if (mode === "manual") {
+    const at = new Map(libOrder().map((id, i) => [id, i]));
+    /* A book you have never placed sorts above the ones you have, keeping its
+       recently-played position among the other unplaced ones — a freshly
+       imported book landing at the bottom of a long shelf is a book you will
+       not find. Array.sort is stable, so returning 0 preserves that. */
+    return [...items].sort((a, b) => {
+      const ai = at.has(a.id) ? at.get(a.id) : -1;
+      const bi = at.has(b.id) ? at.get(b.id) : -1;
+      if (ai === bi) return 0;
+      if (ai === -1) return -1;
+      if (bi === -1) return 1;
+      return ai - bi;
+    });
+  }
+  return items;
+}
+
 let libraryItems = [];
 let libraryQuery = "";
+let dragBookId = null;       // the book a *mouse* is dragging, if any
+
+/* A book being carried by a finger. Declared here, above renderLibrary, so
+   the guard that drops a carried row when the list re-renders has real
+   bindings to read. See "picking a book up with a finger" below. */
+let rdRow = null;            // the row being carried, once the hold has armed
+let rdArm = null;            // the row a finger is resting on, before it arms
+let rdPointer = null;
+let rdTimer = null, rdRaf = 0;
+let rdX = 0, rdY = 0;                              // last finger position
+let rdFromX = 0, rdFromY = 0, rdFromScroll = 0;    // where the gesture began
+let rdMinDy = 0, rdMaxDy = 0;                      // how far it may be carried
+let rdTarget = null;         // where it would land right now
+let rdMark = "";             // ...as a string, so a tick only fires on a change
+let rdEndedAt = 0;           // a lift must not also read as a tap on the row
+let rdWasDraggable = false;
+
+/* Where you are with a book. "Start" used to live in this slot; clicking the
+   row already starts from the beginning of what you have not heard, so the
+   button was spending a thumb's width saying something the row already said.
+
+   Unlabelled reads "Status" in the same grey as its neighbours — a book you
+   have not filed is the ordinary case and should not shout. Completed is the
+   only one that gets a colour, because it is the only one you scan a shelf
+   looking for. */
+const STATUSES = [
+  ["reading",   "Reading"],
+  ["paused",    "Paused"],
+  ["completed", "Completed"],
+  ["dropped",   "Dropped"],
+  ["",          "No status"],
+];
+const statusLabel = s => (STATUSES.find(x => x[0] === s) || ["", "Status"])[1];
+
+const closeStatusMenu = () =>
+  document.querySelectorAll(".status-menu").forEach(m => m.remove());
+
+function statusBtnHtml(b) {
+  const s = b.status || "";
+  return `<button class="row-go status-btn${s ? " on s-" + s : ""}" data-status="${b.id}"
+                  title="Where you are with this book">${esc(s ? statusLabel(s) : "Status")}</button>`;
+}
 
 function libRowHtml(b) {
   return `
@@ -2104,8 +2281,8 @@ function libRowHtml(b) {
           <button class="row-go trash icon-btn" data-del-book="${b.id}" title="Remove from the library">${TRASH_ICON}</button>
         </div>
         <div class="lib-actions">
+          ${statusBtnHtml(b)}
           <button class="row-go" data-open-at="${b.id}|last">Last Time</button>
-          <button class="row-go" data-open-at="${b.id}|start">Start</button>
           ${b.bookmark != null
             ? `<button class="row-go" data-open-at="${b.id}|bookmark">Bookmark · ${clock(b.bookmark)}</button>`
             : ""}
@@ -2116,10 +2293,15 @@ function libRowHtml(b) {
 }
 
 function renderLibrary() {
+  // A re-render replaces the very row a finger is holding. Let go of it first.
+  if (rdRow || rdArm) rdReset();
   const q = libraryQuery.trim().toLowerCase();
   const match = b => !q || (b.title || "").toLowerCase().includes(q)
                         || (b.series || "").toLowerCase().includes(q);
-  const items = libraryItems.filter(match);
+  /* Sorted before grouping, deliberately: the groups are built by walking
+     this list in order, so a series ends up sitting wherever its first book
+     landed and the whole thing follows from one sort. */
+  const items = sortLibrary(libraryItems.filter(match));
 
   if (!libraryItems.length) {
     $("libList").innerHTML = `<p class="hint">Nothing here yet. Use the Import button (top right) to bring in a Phone bundle exported from Spine on your computer.</p>`;
@@ -2157,7 +2339,7 @@ function renderLibrary() {
           <span class="series-name">${esc(g.series)}</span>
           <span class="series-count">${g.books.length} book${g.books.length === 1 ? "" : "s"}${started ? ` · ${started} started` : ""}</span>
         </button>
-        <div class="series-books"${open ? "" : " hidden"}>${g.books.map(libRowHtml).join("")}</div>
+        <div class="series-books" data-sname="${esc(g.series)}"${open ? "" : " hidden"}>${g.books.map(libRowHtml).join("")}</div>
       </div>`;
   }).join("");
 
@@ -2179,8 +2361,323 @@ function refreshSeriesOptions() {
   list.innerHTML = names.map(n => `<option value="${esc(n)}">`).join("");
 }
 
+/* ------------------------------------------------- dragging books about
+
+   Two things at once, because they are the same gesture: dropping a book
+   between two others reorders the shelf, and dropping it onto a series
+   header — or among that series' own books — puts it in that series without
+   going near the text field.
+
+   Membership only ever gets *added* this way. Dragging a book out of a
+   series and into open space does not clear its series: it stays where it
+   belongs and its group moves instead, since a grouped book cannot be shown
+   outside its own group. Clearing is what the text field is for, and a drag
+   that silently un-filed a book would be a bad way to find that out. */
+
+const clearDropMarks = () => {
+  const list = $("libList");
+  if (!list) return;          // the drawer has moved on to Chapters or Notes
+  list.querySelectorAll(".drop-above,.drop-below,.drop-into")
+      .forEach(el => el.classList.remove("drop-above", "drop-below", "drop-into"));
+};
+
+/* Where the shelf currently *looks* like it is, as ids. Taken from the whole
+   library rather than what is on screen, so a first drag while sorted by
+   recency captures that order for everything and only then applies the move
+   — and so a drag while a search is filtering the list does not throw away
+   the position of everything the filter is hiding. */
+function moveBook(id, targetId, after) {
+  const ids = sortLibrary(libraryItems).map(b => b.id).filter(x => x !== id);
+  let at = targetId ? ids.indexOf(targetId) : -1;
+  if (at < 0) at = ids.length; else if (after) at += 1;
+  ids.splice(at, 0, id);
+  setLibOrder(ids);
+}
+
+/* Commit a drop: the new position, and the series it was dropped into if it
+   was dropped into one. Switches the sort to by-hand, because a shelf that
+   silently re-sorted itself out from under a drag would make the drag look
+   broken. */
+async function dropBook(id, { targetId = null, after = false, series } = {}) {
+  const wasSorted = libSort();
+  moveBook(id, targetId, after);
+  setLibSort("manual");
+  const item = libraryItems.find(b => b.id === id);
+  if (series !== undefined && item && item.series !== series) {
+    const r = await api(`/api/series/${id}`, { series });
+    item.series = r.series;
+  }
+  const sel = $("libSort");
+  if (sel) sel.value = "manual";
+  renderLibrary();
+  if (wasSorted !== "manual") toast("Sorted by your order now.");
+}
+
+/* --- the mouse path: HTML5 drag-and-drop, for a laptop with a pointer --- */
+function wireLibraryDrag() {
+  const body = $("libList");
+
+  body.querySelectorAll(".lib-row").forEach(row => {
+    row.draggable = true;
+    row.ondragstart = e => {
+      /* Never start a drag out of a field being typed in — the title and the
+         series field are both edited in place inside this row. */
+      if (e.target.closest("input, [contenteditable='true']")) { e.preventDefault(); return; }
+      dragBookId = row.dataset.open;
+      /* A named type, never "Files". The window-level veil that catches a
+         .spinebook dragged in from the desktop keys off "Files" being
+         present, and rearranging a shelf must not raise it. */
+      e.dataTransfer.setData("application/x-spine-book", dragBookId);
+      e.dataTransfer.effectAllowed = "move";
+      row.classList.add("dragging");
+    };
+    row.ondragend = () => { dragBookId = null; clearDropMarks(); row.classList.remove("dragging"); };
+
+    row.ondragover = e => {
+      if (!dragBookId || row.dataset.open === dragBookId) return;
+      e.preventDefault();
+      const r = row.getBoundingClientRect();
+      const below = e.clientY > r.top + r.height / 2;
+      clearDropMarks();
+      row.classList.add(below ? "drop-below" : "drop-above");
+    };
+    row.ondrop = e => {
+      if (!dragBookId || row.dataset.open === dragBookId) return;
+      e.preventDefault();
+      e.stopPropagation();          // or the list-level drop fires too
+      const r = row.getBoundingClientRect();
+      const below = e.clientY > r.top + r.height / 2;
+      const id = dragBookId;
+      dragBookId = null;
+      // dropped among a series' own books, so it joins that series
+      const inSeries = row.closest(".series-books");
+      dropBook(id, {
+        targetId: row.dataset.open, after: below,
+        series: inSeries ? inSeries.dataset.sname : undefined,
+      });
+    };
+  });
+
+  // the header itself: joins the series and goes to the top of it
+  body.querySelectorAll(".series-head").forEach(head => {
+    head.ondragover = e => {
+      if (!dragBookId) return;
+      e.preventDefault();
+      clearDropMarks();
+      head.classList.add("drop-into");
+    };
+    head.ondrop = e => {
+      if (!dragBookId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const id = dragBookId;
+      dragBookId = null;
+      const name = head.dataset.toggle;
+      const first = libraryItems.find(b => b.series === name && b.id !== id);
+      dropBook(id, { targetId: first ? first.id : null, after: false, series: name });
+    };
+  });
+
+  // past the last row: drop at the end
+  body.ondragover = e => { if (dragBookId) e.preventDefault(); };
+  body.ondrop = e => {
+    if (!dragBookId) return;
+    e.preventDefault();
+    const id = dragBookId;
+    dragBookId = null;
+    dropBook(id, { targetId: null });
+  };
+}
+
+/* ------------------------------------------ picking a book up with a finger
+
+   HTML5 drag-and-drop is a mouse gesture. A finger produces no dragstart at
+   all, so the shelf above simply is not draggable on a phone. This is the
+   same two jobs as one thumb gesture, built the way the chapter picker is:
+   press and hold, feel it arm, drag, lift to drop.
+
+   It sits alongside the mouse path rather than replacing it — the same file
+   serves a phone and a touchscreen laptop — and the two never meet, because
+   this one returns on the first line for a mouse. Everything it commits goes
+   through moveBook/dropBook, so there is one idea of what the order is.
+
+   Half a second rather than the chapter picker's full one: on the scrub track
+   a *short* hold is a legitimate scrub, so the timer there has to outlast it.
+   A press on a library row that is not a tap has no other meaning, and a
+   second per book is a long time when you are arranging a shelf. */
+
+const RD_HOLD_MS = 500;   // past a tap, short of a wait
+const RD_SLOP = 12;       // px of tremor tolerated before it counts as a scroll
+const RD_EDGE = 72;       // this near the top or bottom of the list and it scrolls
+const RD_EDGE_PX = 10;    // ...by this much a frame
+
+function rdPlace() {
+  if (!rdRow) return;
+  /* The scroll delta is in here so the row stays under a still finger while
+     the list auto-scrolls beneath it. */
+  let dy = (rdY - rdFromY) + ($("drawerBody").scrollTop - rdFromScroll);
+  /* Clamped to the list's own bounds, and this is not tidiness. A transformed
+     box counts toward a scroller's scrollable overflow, so a row carried past
+     the last one makes the drawer scrollable further than the shelf actually
+     goes — measured at 2,922px of invented space and 2,903px of scrolling
+     into nothing — and the instant the row comes back the browser clamps
+     scrollTop and the whole list jumps (384px, measured). With the clamp: no
+     extra overflow at all, scrolling stops at the true end, no jump. */
+  dy = Math.max(rdMinDy, Math.min(rdMaxDy, dy));
+  rdRow.style.transform = `translateY(${dy}px)`;
+}
+
+function rdAim() {
+  if (!rdRow) return;
+  /* .lifting carries pointer-events:none, which is what lets this see the row
+     underneath the finger rather than the one being carried. */
+  const el = document.elementFromPoint(rdX, rdY);
+  const list = $("libList");
+  let key = "";
+  clearDropMarks();
+  rdTarget = null;
+  if (el && list && list.contains(el)) {
+    const head = el.closest(".series-head");
+    const row = el.closest(".lib-row");
+    if (head) {
+      head.classList.add("drop-into");
+      rdTarget = { head: head.dataset.toggle };
+      key = "into:" + head.dataset.toggle;
+    } else if (row && row !== rdRow) {
+      const r = row.getBoundingClientRect();
+      const below = rdY > r.top + r.height / 2;
+      row.classList.add(below ? "drop-below" : "drop-above");
+      const grp = row.closest(".series-books");
+      rdTarget = { id: row.dataset.open, after: below, series: grp ? grp.dataset.sname : undefined };
+      key = row.dataset.open + (below ? "|b" : "|a");
+    }
+  }
+  // one tick per slot crossed, and none for staying put — same as the picker
+  if (key !== rdMark) { rdMark = key; if (key) haptic("tick"); }
+}
+
+/* Hold near either end of the drawer and it keeps scrolling on its own. Not
+   optional, for the same reason the chapter picker's edge repeat is not: a
+   shelf of any length does not fit in one thumb-throw, and "carry this book
+   to the top" has to mean the top from anywhere.
+
+   scrollTop is assigned directly, which is safe here and would not be on
+   .reader — .drawer-body carries no scroll-behavior:smooth. */
+function rdEdgeScroll() {
+  rdRaf = 0;
+  if (!rdRow) return;
+  const sc = $("drawerBody"), r = sc.getBoundingClientRect();
+  const dir = rdY < r.top + RD_EDGE ? -1 : rdY > r.bottom - RD_EDGE ? 1 : 0;
+  if (dir) {
+    const was = sc.scrollTop;
+    sc.scrollTop = was + dir * RD_EDGE_PX;
+    if (sc.scrollTop !== was) { rdPlace(); rdAim(); }
+  }
+  rdRaf = requestAnimationFrame(rdEdgeScroll);
+}
+
+function rdReset() {
+  clearTimeout(rdTimer); rdTimer = null;
+  cancelAnimationFrame(rdRaf); rdRaf = 0;
+  if (rdArm) { rdArm.draggable = rdWasDraggable; rdArm = null; }
+  if (rdRow) {
+    try { rdRow.releasePointerCapture(rdPointer); } catch (e) { /* finger gone */ }
+    rdRow.classList.remove("lifting");
+    rdRow.style.transform = "";
+    rdRow.draggable = rdWasDraggable;
+    rdRow = null;
+    rdEndedAt = performance.now();
+  }
+  rdPointer = null; rdTarget = null; rdMark = "";
+  clearDropMarks();
+}
+
+function rdLift() {
+  const row = rdArm;
+  rdTimer = null; rdArm = null;
+  if (!row || !row.isConnected) return;
+  rdRow = row;
+  rdTarget = null; rdMark = "";
+  rdFromScroll = $("drawerBody").scrollTop;
+  /* Measured before the transform exists, and valid for the whole gesture:
+     dy already carries the scroll delta, so these stay true however far the
+     list scrolls underneath. */
+  const r = row.getBoundingClientRect(), lb = $("libList").getBoundingClientRect();
+  rdMinDy = lb.top - r.top;
+  rdMaxDy = lb.bottom - r.bottom;
+  row.classList.add("lifting");
+  /* Touch gives the element that got pointerdown an implicit capture; taking
+     it explicitly keeps the moves coming to this row whatever the finger
+     passes over, exactly as the chapter picker takes it on #track. */
+  try { row.setPointerCapture(rdPointer); } catch (e) { /* finger gone */ }
+  haptic("arm");
+  rdPlace();
+}
+
+function rdDrop() {
+  const t = rdTarget, id = rdRow && rdRow.dataset.open;
+  rdReset();
+  if (!t || !id) return;            // released over nothing: nothing moves
+  if (t.head !== undefined) {
+    const first = libraryItems.find(b => b.series === t.head && b.id !== id);
+    return dropBook(id, { targetId: first ? first.id : null, after: false, series: t.head });
+  }
+  dropBook(id, { targetId: t.id, after: t.after, series: t.series });
+}
+
+function wireLibraryTouchDrag() {
+  $("libList").querySelectorAll(".lib-row").forEach(row => {
+    row.addEventListener("pointerdown", e => {
+      if (e.pointerType === "mouse") return;      // a mouse has its own drag
+      if (rdRow || rdArm) return;                 // one finger at a time
+      /* Never out of a field being typed in, and never off one of the row's
+         own buttons: resting a thumb on Status, Last Time, the series field
+         or the trash for half a second must not pick the shelf up. */
+      if (e.target.closest("input, textarea, button, [contenteditable='true']")) return;
+      /* ...and not while anything in the list is mid-edit. Committing that
+         edit re-renders the list out from under the gesture. */
+      if ($("libList").querySelector("[contenteditable='true'], .series-btn.editing")) return;
+      rdArm = row; rdPointer = e.pointerId;
+      rdX = rdFromX = e.clientX; rdY = rdFromY = e.clientY;
+      /* Windows Chrome will start its own HTML5 drag from a long press on a
+         draggable element, which would fight this one for the same finger.
+         Off for the length of this gesture only; a mouse never reaches here. */
+      rdWasDraggable = row.draggable;
+      row.draggable = false;
+      rdTimer = setTimeout(rdLift, RD_HOLD_MS);
+    });
+
+    row.addEventListener("pointermove", e => {
+      if (e.pointerId !== rdPointer) return;
+      rdX = e.clientX; rdY = e.clientY;
+      if (!rdRow) {
+        // still waiting to arm: real movement means this was a scroll
+        if (Math.hypot(rdX - rdFromX, rdY - rdFromY) > RD_SLOP) rdReset();
+        return;
+      }
+      rdPlace();
+      rdAim();
+      if (!rdRaf) rdRaf = requestAnimationFrame(rdEdgeScroll);
+    });
+
+    row.addEventListener("pointerup", e => {
+      if (e.pointerId !== rdPointer) return;
+      if (rdRow) rdDrop(); else rdReset();
+    });
+    /* The system took the gesture — a call, a notification, or the browser
+       deciding this was a scroll after all. Put it back untouched. */
+    row.addEventListener("pointercancel", e => {
+      if (e.pointerId !== rdPointer) return;
+      rdReset();
+    });
+  });
+}
+
 function wireLibrary() {
   const body = $("libList");
+
+  wireLibraryDrag();
+  wireLibraryTouchDrag();
 
   body.querySelectorAll("[data-toggle]").forEach(h => h.onclick = e => {
     e.stopPropagation();
@@ -2271,6 +2768,43 @@ function wireLibrary() {
      a second book into a series you already made means picking it rather
      than retyping it and risking a typo that quietly splits it into two. */
   refreshSeriesOptions();
+  /* A little menu under the button rather than a cycling click: four states
+     is too many to cycle through to reach the one you want, and cycling
+     hides what the options even are. Built and thrown away per open, and
+     positioned fixed against the button so the drawer's own scrolling
+     cannot leave it stranded halfway up the list. */
+  body.querySelectorAll("[data-status]").forEach(btn => btn.onclick = e => {
+    e.stopPropagation();          // the row itself opens the book
+    closeStatusMenu();
+    const id = btn.dataset.status;
+    const cur = (libraryItems.find(b => b.id === id) || {}).status || "";
+    const menu = document.createElement("div");
+    menu.className = "status-menu";
+    menu.innerHTML = STATUSES.map(([v, label]) =>
+      `<button class="status-opt${v === cur ? " on" : ""}${v ? " s-" + v : ""}" data-v="${v}">${label}</button>`
+    ).join("");
+    document.body.appendChild(menu);
+    const r = btn.getBoundingClientRect();
+    const h = menu.getBoundingClientRect().height;
+    // flip above the button when there is no room below it
+    menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menu.getBoundingClientRect().width - 8))}px`;
+    menu.style.top = (r.bottom + h + 8 < innerHeight) ? `${r.bottom + 4}px` : `${r.top - h - 4}px`;
+
+    menu.querySelectorAll("[data-v]").forEach(opt => opt.onclick = async ev => {
+      ev.stopPropagation();
+      const want = opt.dataset.v;
+      closeStatusMenu();
+      if (want === cur) return;
+      const res = await api(`/api/status/${id}`, { status: want });
+      const item = libraryItems.find(b => b.id === id);
+      if (item) item.status = res.status;
+      renderLibrary();
+    });
+    // one dismissal path for clicking anywhere else, added next tick so this
+    // very click does not immediately close what it just opened
+    setTimeout(() => document.addEventListener("click", closeStatusMenu, { once: true }), 0);
+  });
+
   body.querySelectorAll("[data-series]").forEach(btn => btn.onclick = async e => {
     e.stopPropagation();
     const id = btn.dataset.series;
@@ -2355,6 +2889,26 @@ function wireLibrary() {
   });
 }
 
+/* Two listeners on the drawer rather than on the rows, because both have to
+   survive the list being re-rendered, and because a non-passive touchmove on
+   anything bigger than this would tax scrolling everywhere — the reader in
+   particular. #drawerBody outlives every render; only its contents change. */
+$("drawerBody").addEventListener("touchmove", e => {
+  /* What actually stops the list scrolling under a carried book. touch-action
+     cannot: the browser fixes a gesture's scroll behaviour when the finger
+     lands, long before the hold arms, and changing it mid-gesture does
+     nothing. This works because the finger was still while the timer ran, so
+     no scroll has begun and this move is still cancellable. */
+  if (rdRow) e.preventDefault();
+}, { passive: false });
+
+$("drawerBody").addEventListener("click", e => {
+  /* Arm the grab, think better of it, and lift straight up: the touch never
+     moved, so the browser fires a click, and the row's own click opens the
+     book. Everything else about that gesture was correctly a no-op. */
+  if (performance.now() - rdEndedAt < 400) { e.stopPropagation(); e.preventDefault(); }
+}, true);
+
 $("btnLibrary").onclick = async () => {
   openDrawer("Library");
   // openDrawer only shows the panel — it doesn't touch drawerBody, so without
@@ -2365,10 +2919,23 @@ $("btnLibrary").onclick = async () => {
   $("drawerBody").innerHTML =
     `<label class="lib-find"><input id="libFind" type="search"
         placeholder="Search titles and series" autocomplete="off"></label>
+     <div class="lib-sort">
+       <label for="libSort">Sort</label>
+       <select id="libSort">
+         <option value="recent">Recently played</option>
+         <option value="title">Title</option>
+         <option value="manual">My order</option>
+       </select>
+       <span class="lib-sort-hint fine">Drag to reorder, or onto a series to file it</span>
+       <span class="lib-sort-hint coarse">Hold a book to pick it up</span>
+     </div>
      <div id="libList"></div>`;
   const find = $("libFind");
   find.value = libraryQuery;
   find.oninput = () => { libraryQuery = find.value; renderLibrary(); };
+  const sort = $("libSort");
+  sort.value = libSort();
+  sort.onchange = () => { setLibSort(sort.value); renderLibrary(); };
   renderLibrary();
 
   /* Which build this is, and where it lives. A dev copy and an installed one
