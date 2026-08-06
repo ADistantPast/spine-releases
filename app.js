@@ -134,8 +134,7 @@ async function loadBook(id, startAt = "last") {
     : startAt === "bookmark" && b.bookmark != null ? b.bookmark
     : (b.position || 0);
   renderBook(t);
-  lyricIdx = -1;
-  if (compact) renderLyric(t);
+  if (compact) renderLyric(t, true);
   seekWhenReady(t);
   browseT = t;
   lastMarkPct = -1;   // a new book means a new duration behind the same %
@@ -648,12 +647,19 @@ function buildLyricDom() {
   lyricWordIdx = -1;
 }
 
-function renderLyric(t) {
+/* `force` re-runs the swap even when the sentence index has not changed.
+
+   It exists because callers used to force a redraw by setting lyricIdx = -1
+   first — and lyricIdx is also how this function finds the sentence it has to
+   take "now" *off*. Zeroing it skipped that cleanup entirely, so the previous
+   sentence kept the class, stayed scaled up, and kept its word spans. Two big
+   sentences at once, every time you tapped one, whether playing or paused. */
+function renderLyric(t, force) {
   if (!lyric.length) return;
   if (!lyricEls || lyricEls.length !== lyric.length) buildLyricDom();
 
   const idx = posAt(lyric, t);
-  if (idx !== lyricIdx) {
+  if (idx !== lyricIdx || force) {
     if (!lyricWin || idx - lyricWin.lo < LYRIC_DRIFT || lyricWin.hi - idx < LYRIC_DRIFT)
       windowLyric(idx);
     if (lyricIdx >= 0) {
@@ -1215,8 +1221,7 @@ function playFrom(t) {
                             // .reader{scroll-behavior:smooth} and animate.
   updateTimeline(t);
   setNow(wordAt(t));
-  lyricIdx = -1;
-  if (compact) renderLyric(t);
+  if (compact) renderLyric(t, true);
   playUi();
   savePosition();
 }
@@ -1635,7 +1640,6 @@ $("btnPop").onclick = $("btnPopExit").onclick = () => {
   $("app").classList.toggle("compact", compact);
   $("transport").classList.remove("expanded");   // the reading view opens clean
   $("btnPop").title = compact ? "Back to the full page" : "Reading view";
-  lyricIdx = -1;
   /* Both directions snap to the playhead, on the owner's explicit call —
      this used to carry whatever you had browsed ahead to across the switch.
 
@@ -1764,7 +1768,7 @@ function snapToPlayhead(behavior) {
   showJump(false);
   browseT = audio.currentTime;
   $("seek").value = Math.floor(browseT);
-  if (compact) { lyricIdx = -1; renderLyric(audio.currentTime); }
+  if (compact) renderLyric(audio.currentTime, true);
   else scrollToTime(audio.currentTime, behavior || "smooth");
 }
 $("jumpNow").onclick = () => snapToPlayhead();
