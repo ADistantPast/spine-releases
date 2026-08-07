@@ -94,22 +94,26 @@ async function api(url, body) {
    rest of this file has to stay the same in both. */
 $("btnImport").onclick = () => {
   openDrawer("Add a book");
+  /* The code goes first because it is the thing you came here to do — you
+     have been read a code and you want to type it. Opening a file is the
+     fallback, and the explanation belongs under both rather than wedged
+     between them. */
   $("drawerBody").innerHTML = `
-    <div class="row stack" id="addFromFile">
-      <span class="row-n">Open a file</span>
-      <span class="row-sub">A .spinebook someone sent you. Whatever it has been
-        renamed to along the way — the reader looks inside it.</span>
-    </div>
-    <p class="hint">Or type a code</p>
+    <p class="hint">Type the code someone sent you</p>
     <div class="code-entry">
       <input id="codeIn" class="code-in" spellcheck="false" autocomplete="off"
              autocapitalize="off" placeholder="0jhyvy-A7K2-M9QX-P4LT-N3RB">
       <button class="btn" id="codeGo">Get the book</button>
     </div>
+    <div id="recvBox"></div>
+    <div class="row stack" id="addFromFile">
+      <span class="row-n">Or open a file</span>
+      <span class="row-sub">A .spinebook someone sent you. Whatever it has been
+        renamed to along the way — the reader looks inside it.</span>
+    </div>
     <p class="hint">Codes last a few hours. The book arrives encrypted and the
       code is what unlocks it, so the service carrying it never sees what it
-      is holding. Nothing is uploaded from here.</p>
-    <div id="recvBox"></div>`;
+      is holding. Nothing is uploaded from here.</p>`;
 
   $("addFromFile").onclick = () => $("filePick").click();
 
