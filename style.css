@@ -439,13 +439,19 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    track that is a fraction as wide as the unfolded screen's, so a busy book
    can run out of room here well before "dense" is the only option left. */
 .timeline.tight .tick-n{font-size:7px}
-/* Past the point where even that fits, the marks are a picket fence and the
-   numbers are unreadable — drop both and leave a clean scrub bar rather than
-   a smear. Nothing is lost permanently: fitTickLabels() re-measures on every
-   resize, so rotating or unfolding the phone widens the track and brings the
-   chapters straight back. Note ticks stay; there are rarely enough of them
-   to crowd. */
-.timeline.dense .tick:not(.note){display:none}
+/* Past the point where even that fits, drop the NUMBERS and keep the marks.
+   This used to hide the chapter ticks outright, and that was the wrong half
+   to throw away: the numbers are a convenience, but the marks are the
+   navigation — they are what shows how far in you are and what you tap to
+   jump. On a phone held upright a twenty-chapter book crosses the threshold
+   easily, so the chapters simply vanished, which reads as them being broken
+   rather than as a considered fallback.
+
+   A mark is about 3px wide against a ~14px number, so they still read as
+   separate ticks long after the numbers would have collided. If they ever do
+   crowd into a picket fence, the hold-to-scrub chapter reel is the way
+   through a book that dense — see the picker in app.js. */
+.timeline.dense .tick:not(.note) .tick-n{display:none}
 
 /* the full label only appears when you reach for it */
 .tick-label{
