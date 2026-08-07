@@ -451,7 +451,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    separate ticks long after the numbers would have collided. If they ever do
    crowd into a picket fence, the hold-to-scrub chapter reel is the way
    through a book that dense — see the picker in app.js. */
-.timeline.dense .tick:not(.note) .tick-n{display:none}
+.tick-n.crowded{display:none}
 
 /* the full label only appears when you reach for it */
 .tick-label{

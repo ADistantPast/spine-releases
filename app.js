@@ -952,14 +952,50 @@ const TICK_GAP = 6;
 // does not, on either row. Smaller numbers beat no numbers.
 const TICK_GAP_TIGHT = 4;
 
+/* Hide only the numbers that actually run into the one before them, keeping
+   every mark and as many numbers as genuinely fit.
+
+   The escalation above is all-or-nothing, and that is the wrong shape for a
+   real book: chapters are not evenly spaced, so two short ones back to back
+   put their numbers on top of each other while the other twenty have room to
+   spare — and one such pair was enough to drop every number in the book.
+   Walking each row left to right and dropping only what overlaps costs one
+   pass over labels already measured. */
+function thinLabels(pad) {
+  const rows = new Map();
+  for (const el of $("ticks").querySelectorAll(".tick:not(.note) .tick-n")) {
+    const r = el.getBoundingClientRect();
+    if (!r.width) continue;
+    const key = Math.round(r.top);          // staggered rows thin separately
+    if (!rows.has(key)) rows.set(key, []);
+    rows.get(key).push({ el, r });
+  }
+  for (const list of rows.values()) {
+    list.sort((a, b) => a.r.left - b.r.left);
+    let lastRight = -Infinity;
+    for (const { el, r } of list) {
+      if (r.left < lastRight + pad) el.classList.add("crowded");
+      else lastRight = r.right;             // only a kept label blocks the next
+    }
+  }
+}
+
 function fitTickLabels() {
   const tl = $("timeline");
-  tl.classList.remove("stagger", "dense", "tight");
+  tl.classList.remove("stagger", "tight");
+  // start from every number showing, or last run's hiding skews the measuring
+  $("ticks").querySelectorAll(".tick-n.crowded")
+    .forEach(n => n.classList.remove("crowded"));
+
   if (labelsCollide(TICK_GAP)) {
     tl.classList.add("stagger");
     if (labelsCollide(TICK_GAP)) {
       tl.classList.add("tight");
-      if (labelsCollide(TICK_GAP_TIGHT)) tl.classList.add("dense");
+      // Still colliding at the smallest size: thin, rather than the old
+      // .dense which hid the whole chapter tick — mark and all. The marks are
+      // the navigation; losing them to a label that would not fit was always
+      // the wrong trade.
+      if (labelsCollide(TICK_GAP_TIGHT)) thinLabels(TICK_GAP_TIGHT);
     }
   }
   // The chapter numbers are absolutely positioned above the track, so they
@@ -967,8 +1003,12 @@ function fitTickLabels() {
   // they end up flush against the reader's last line (measured: the topmost
   // label sat on exactly the same pixel as the transport's top edge). CSS
   // can't look upwards from .timeline, so mirror the state onto the bar.
+  // Keyed off a label actually surviving, since thinning can in principle
+  // leave a row with only one.
+  const anyLabel = [...$("ticks").querySelectorAll(".tick:not(.note) .tick-n")]
+    .some(n => n.getBoundingClientRect().width > 0);
   const tp = $("transport");
-  tp.classList.toggle("has-ticks", !tl.classList.contains("dense"));
+  tp.classList.toggle("has-ticks", anyLabel);
   tp.classList.toggle("two-rows", tl.classList.contains("stagger"));
 }
 
