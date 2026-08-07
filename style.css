@@ -1265,7 +1265,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   flex:1 1 auto;min-width:0;background:var(--ink);color:var(--bone);
   border:1px solid var(--hair);border-radius:4px;padding:9px 10px;
   font-family:var(--data);font-size:13px;letter-spacing:.06em;
-  text-transform:uppercase;
+  /* Deliberately NOT text-transform:uppercase. The code is issued with a
+     lowercase location and an uppercase secret, and forcing the field to
+     shout made what you typed look nothing like what you were handed —
+     reported from a phone as only being able to enter capitals. Case has
+     never mattered: parse_code() lowercases the location and the base32
+     alphabet is uppercase either way, so ALL CAPS, all lower and mixed all
+     resolve to the same book. What was wrong was only that it looked
+     wrong, and looking wrong about a code you are copying by eye is enough
+     to stop someone trying it. */
 }
 .code-in:focus{outline:none;border-color:var(--verdigris)}
 .code-in::placeholder{color:var(--dust);opacity:.55;text-transform:none}
