@@ -88,9 +88,58 @@ async function api(url, body) {
 
 /* ------------------------------------------------------------ opening */
 
-// the native side raises the file picker; see NativeBridge in MainActivity
-/* Opening a book is picking a file — see the open screen in index.html. */
-$("btnImport").onclick = () => $("filePick").click();
+/* Opening a book is picking a file — or typing the code someone read out.
+   This is one of the three places the web reader is deliberately allowed to
+   differ from the phone copy (see the web reader notes in CLAUDE.md); the
+   rest of this file has to stay the same in both. */
+$("btnImport").onclick = () => {
+  openDrawer("Add a book");
+  $("drawerBody").innerHTML = `
+    <div class="row stack" id="addFromFile">
+      <span class="row-n">Open a file</span>
+      <span class="row-sub">A .spinebook someone sent you. Whatever it has been
+        renamed to along the way — the reader looks inside it.</span>
+    </div>
+    <p class="hint">Or type a code</p>
+    <div class="code-entry">
+      <input id="codeIn" class="code-in" spellcheck="false" autocomplete="off"
+             autocapitalize="off" placeholder="0jhyvy-A7K2-M9QX-P4LT-N3RB">
+      <button class="btn" id="codeGo">Get the book</button>
+    </div>
+    <p class="hint">Codes last a few hours. The book arrives encrypted and the
+      code is what unlocks it, so the service carrying it never sees what it
+      is holding. Nothing is uploaded from here.</p>
+    <div id="recvBox"></div>`;
+
+  $("addFromFile").onclick = () => $("filePick").click();
+
+  const go = async () => {
+    const code = $("codeIn").value.trim();
+    if (!code) return;
+    const box = $("recvBox");
+    $("codeGo").disabled = true;
+    box.innerHTML = `
+      <p class="export-stage" id="recvStage">Fetching</p>
+      <div class="working-bar"><div id="recvFill"></div></div>
+      <p class="export-pct" id="recvPct">0%</p>`;
+    try {
+      const b = await SpineLocal.receiveByCode(code, f => {
+        const pct = Math.round(Math.min(1, Math.max(0, f)) * 100);
+        if ($("recvFill")) { $("recvFill").style.width = pct + "%"; $("recvPct").textContent = pct + "%"; }
+      });
+      closeDrawer();
+      toast(`Added ${b.title || "the book"}`);
+      await loadBook(b.id, "last");
+    } catch (e) {
+      if ($("recvBox")) $("recvBox").innerHTML = "";
+      toast(e.message || "Could not fetch that book.");
+    } finally {
+      if ($("codeGo")) $("codeGo").disabled = false;
+    }
+  };
+  $("codeGo").onclick = go;
+  $("codeIn").onkeydown = e => { if (e.key === "Enter") go(); };
+};
 
 async function loadBook(id, startAt = "last") {
   const b = await api(`/api/book/${id}`);
@@ -961,41 +1010,26 @@ const TICK_GAP_TIGHT = 4;
    spare — and one such pair was enough to drop every number in the book.
    Walking each row left to right and dropping only what overlaps costs one
    pass over labels already measured. */
-function thinLabels(pad) {
-  const rows = new Map();
-  for (const el of $("ticks").querySelectorAll(".tick:not(.note) .tick-n")) {
-    const r = el.getBoundingClientRect();
-    if (!r.width) continue;
-    const key = Math.round(r.top);          // staggered rows thin separately
-    if (!rows.has(key)) rows.set(key, []);
-    rows.get(key).push({ el, r });
-  }
-  for (const list of rows.values()) {
-    list.sort((a, b) => a.r.left - b.r.left);
-    let lastRight = -Infinity;
-    for (const { el, r } of list) {
-      if (r.left < lastRight + pad) el.classList.add("crowded");
-      else lastRight = r.right;             // only a kept label blocks the next
-    }
-  }
-}
-
 function fitTickLabels() {
   const tl = $("timeline");
-  tl.classList.remove("stagger", "tight");
-  // start from every number showing, or last run's hiding skews the measuring
-  $("ticks").querySelectorAll(".tick-n.crowded")
-    .forEach(n => n.classList.remove("crowded"));
+  tl.classList.remove("stagger", "tight", "nonums");
 
   if (labelsCollide(TICK_GAP)) {
     tl.classList.add("stagger");
     if (labelsCollide(TICK_GAP)) {
       tl.classList.add("tight");
-      // Still colliding at the smallest size: thin, rather than the old
-      // .dense which hid the whole chapter tick — mark and all. The marks are
-      // the navigation; losing them to a label that would not fit was always
-      // the wrong trade.
-      if (labelsCollide(TICK_GAP_TIGHT)) thinLabels(TICK_GAP_TIGHT);
+      // Still colliding at the smallest size: drop every number and keep
+      // every mark.
+      //
+      // Two decisions, both the owner's and both learned the hard way. The
+      // marks never go — the old .dense hid the whole tick, and the mark is
+      // the navigation while the number is only a convenience. And the
+      // numbers go all together: an intermediate version dropped just the
+      // two that overlapped, which is tidier arithmetic and reads as a bug,
+      // because a row of numbers with gaps in it looks broken rather than
+      // deliberate. On a phone held upright this is the ordinary state, and
+      // a bare row of marks is what it looked like before and should again.
+      if (labelsCollide(TICK_GAP_TIGHT)) tl.classList.add("nonums");
     }
   }
   // The chapter numbers are absolutely positioned above the track, so they
@@ -1766,8 +1800,38 @@ function syncBarToView() {
   }, 50);
 }
 
+/* "The user is scrolling" has to actually mean the user.
+
+   A scroll event on its own is not evidence of one. Coming back to a
+   backgrounded Android WebView fires one — from the scroll position being
+   restored, or from the window-inset listener re-padding the content — and
+   so do rotating the phone and unfolding the Fold. Every one of those used
+   to switch following off, and the result reads as the book losing sync:
+   frame() goes on lighting the correct word, but setNow() returns before
+   the scroll when follow is false, so the highlight is right and the page
+   simply never moves. Reported as having to pause and resume to get the
+   text back to the voice.
+
+   autoScrollUntil already covers the scrolls this app causes itself. This
+   covers the ones nobody caused at all. A real gesture leaves a mark within
+   a few hundred milliseconds of the scroll it produces; a fling keeps firing
+   touchmove until the finger leaves, and the coast afterwards only has to be
+   inside the window for the first event, since following is already off by
+   then. A mouse merely crossing the window is not a gesture, which is why
+   pointermove only counts with a button held. */
+const USER_SCROLL_GRACE = 1200;
+let lastUserInput = 0;
+const markUserInput = e => {
+  if (e.type === "pointermove" && !e.buttons) return;
+  lastUserInput = performance.now();
+};
+for (const ev of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart", "touchmove"])
+  addEventListener(ev, markUserInput, { passive: true, capture: true });
+
 $("reader").addEventListener("scroll", () => {
-  if (performance.now() < autoScrollUntil) return;
+  const now = performance.now();
+  if (now < autoScrollUntil) return;
+  if (now - lastUserInput > USER_SCROLL_GRACE) return;
   stopFollowing();
   syncBarToView();
 }, { passive: true });

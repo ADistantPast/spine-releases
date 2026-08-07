@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.25";
+  const WEB_VERSION = "1.0.26";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -182,6 +182,124 @@
   const putBook = b => tx("readwrite", s => s.put(b));
   const allBooks = () => tx("readonly", s => s.getAll());
   const dropBook = id => tx("readwrite", s => s.delete(id));
+
+  /* ------------------------------------------------ a book sent by code
+   *
+   * Someone on the desktop app sends a book and reads out a code. This is
+   * the other end of that: fetch it, unlock it, hand it to addBundle as if
+   * it had been picked off disk.
+   *
+   * The browser can do this at all only because the host answers with
+   * Access-Control-Allow-Origin:* — measured, not assumed, and it was the
+   * open question that decided whether the web reader could take part.
+   * Content-Length is exposed too, which is what makes the progress real
+   * rather than a spinner.
+   *
+   * Nothing here is trusted to the host: it holds AES-GCM ciphertext and the
+   * key lives in the code. See the sharing section of app.py for the format;
+   * the two must agree byte for byte.
+   */
+  const SHARE_FETCH = "https://litter.catbox.moe/{code}.bin";
+  const SHARE_MAGIC = "SPINEBK1";
+  const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const SECRET_BYTES = 10;
+
+  function parseCode(code) {
+    const clean = (code || "").replace(/[^0-9A-Za-z]/g, "");
+    if (clean.length !== 6 + 16) throw new Error("That code is not the right length.");
+    const location = clean.slice(0, 6).toLowerCase();
+    let n = 0n;
+    for (const ch of clean.slice(6).toUpperCase()) {
+      // the Crockford slips: a typed I or L is 1, a typed O is 0
+      const v = B32.indexOf({ I: "1", L: "1", O: "0", U: "0" }[ch] || ch);
+      if (v < 0) throw new Error(`"${ch}" is not part of a Spine code.`);
+      n = (n << 5n) | BigInt(v);
+    }
+    const secret = new Uint8Array(SECRET_BYTES);
+    for (let i = SECRET_BYTES - 1; i >= 0; i--) { secret[i] = Number(n & 255n); n >>= 8n; }
+    return { location, secret };
+  }
+
+  async function shareKey(secret) {
+    const enc = new TextEncoder();
+    const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt: enc.encode("spine-share-v1"),
+        info: enc.encode("spine-share-key") }, base, 256);
+    return crypto.subtle.importKey("raw", bits, "AES-GCM", false, ["decrypt"]);
+  }
+
+  async function receiveByCode(code, onProgress) {
+    const { location, secret } = parseCode(code);
+    const key = await shareKey(secret);
+    const res = await fetch(SHARE_FETCH.replace("{code}", location));
+    if (res.status === 404)
+      throw new Error("That code has expired, or it was typed wrong. Codes only last a few hours.");
+    if (!res.ok) throw new Error(`The transfer service answered ${res.status}.`);
+
+    /* Read the stream and unseal as it arrives, rather than downloading the
+       whole thing and then decrypting it. A book is several hundred
+       megabytes and holding the ciphertext AND the plaintext at once is how
+       a phone browser gets killed. The plaintext pieces go straight into a
+       Blob, which the browser is free to spill to disk. */
+    const total = +res.headers.get("Content-Length") || 0;
+    const reader = res.body.getReader();
+    const parts = [];
+    let buf = new Uint8Array(0), got = 0, index = 0, prefix = null;
+
+    const take = n => {
+      if (buf.length < n) return null;
+      const head = buf.slice(0, n);
+      buf = buf.subarray(n);
+      return head;
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value) {
+        const grown = new Uint8Array(buf.length + value.length);
+        grown.set(buf); grown.set(value, buf.length);
+        buf = grown;
+        got += value.length;
+        if (onProgress && total) onProgress(got / total);
+      }
+      if (!prefix) {
+        const head = take(17);
+        if (head) {
+          if (new TextDecoder().decode(head.slice(0, 8)) !== SHARE_MAGIC)
+            throw new Error("That download is not a Spine book.");
+          if (head[8] !== 1)
+            throw new Error("That book was sent by a newer version of Spine.");
+          prefix = head.slice(13, 17);
+        }
+      }
+      while (prefix) {
+        if (buf.length < 4) break;
+        const size = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0);
+        if (buf.length < 4 + size) break;
+        take(4);
+        const sealed = take(size);
+        const nonce = new Uint8Array(12);
+        nonce.set(prefix);
+        new DataView(nonce.buffer).setUint32(8, index);   // 4-byte prefix + 8-byte counter
+        const aad = new Uint8Array(4);
+        new DataView(aad.buffer).setUint32(0, index);
+        let plain;
+        try {
+          plain = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: nonce, additionalData: aad, tagLength: 128 },
+            key, sealed);
+        } catch (e) {
+          throw new Error("That code is not right for this book.");
+        }
+        parts.push(plain);
+        index++;
+      }
+      if (done) break;
+    }
+    if (buf.length) throw new Error("That download stopped early. Try the code again.");
+    return addBundle(new Blob(parts));
+  }
 
   /* --------------------------------------------------------- the shelf */
 
@@ -528,6 +646,7 @@
     reoffer: id => { const b = attached.get(id); if (b) tellWorker(id, b); return !!b; },
     hasAudio,
     addBundle,
+    receiveByCode,
     attachAudio,
     looksLikeBundle,
     idForAudio,

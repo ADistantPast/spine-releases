@@ -451,7 +451,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    separate ticks long after the numbers would have collided. If they ever do
    crowd into a picket fence, the hold-to-scrub chapter reel is the way
    through a book that dense — see the picker in app.js. */
-.tick-n.crowded{display:none}
+.timeline.nonums .tick:not(.note) .tick-n{display:none}
+/* Numbers all together or not at all, and the marks never at all.
+   Dropping only the two that overlapped was tidier arithmetic and read
+   as a bug: a row of numbers with holes in it looks broken rather than
+   deliberate. This is the ordinary state on a phone held upright. */
 
 /* the full label only appears when you reach for it */
 .tick-label{
@@ -1246,3 +1250,35 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 }
 .caret.bm{color:var(--flag)}
 .caret.nt{color:var(--moss)}
+
+/* Sending a book, and getting one by code.
+ *
+ * Both the entered code and the issued one are set in the timecode face.
+ * These are strings you have to read one character at a time and compare
+ * against something on another screen — the opposite of ordinary text,
+ * which is recognised whole — so they need the face where a 0 cannot be an
+ * O and letters are all one width. The letter-spacing is what makes the
+ * groups legible from across a desk.
+ */
+.code-entry{display:flex;gap:8px;align-items:center;margin:4px 0 14px}
+.code-in{
+  flex:1 1 auto;min-width:0;background:var(--ink);color:var(--bone);
+  border:1px solid var(--hair);border-radius:4px;padding:9px 10px;
+  font-family:var(--data);font-size:13px;letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.code-in:focus{outline:none;border-color:var(--verdigris)}
+.code-in::placeholder{color:var(--dust);opacity:.55;text-transform:none}
+
+.share-code{
+  margin:6px 0 16px;font-family:var(--data);font-size:19px;
+  color:var(--verdigris);letter-spacing:.08em;word-break:break-all;
+  /* selectable on purpose: copy may be refused and this is the fallback */
+  user-select:all;
+}
+
+/* A radio in a row that already knows how to be a row. The input keeps its
+   native look — this is a real choice with a real default, and a hand-drawn
+   one would only be a worse version of a control the OS already draws. */
+.expiry-row{display:flex;align-items:center;gap:10px;cursor:pointer}
+.expiry-row input{accent-color:var(--verdigris);margin:0}
