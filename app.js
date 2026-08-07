@@ -132,7 +132,16 @@ $("btnImport").onclick = () => {
         if ($("recvFill")) { $("recvFill").style.width = pct + "%"; $("recvPct").textContent = pct + "%"; }
       });
       closeDrawer();
-      toast(`Added ${b.title || "the book"}`);
+      // A book that came from a code has no file behind it, so shelf.js
+      // keeps a copy without being asked. Say so when it could not — the
+      // book plays now and will be gone after a reload, and that is worth
+      // knowing while the code still works.
+      toast(b.keepFailed
+        ? `Added ${b.title || "the book"} — but it could not be kept on this `
+          + `device (${b.keepFailed}), so get it again before you close the tab.`
+        : b.savedAs
+          ? `Added ${b.title || "the book"}, and saved ${b.savedAs} to your downloads.`
+          : `Added ${b.title || "the book"}`);
       await loadBook(b.id, "last");
     } catch (e) {
       if ($("recvBox")) $("recvBox").innerHTML = "";

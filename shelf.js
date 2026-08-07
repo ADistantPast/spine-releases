@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.30";
+  const WEB_VERSION = "1.0.31";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -298,7 +298,66 @@
       if (done) break;
     }
     if (buf.length) throw new Error("That download stopped early. Try the code again.");
-    return addBundle(new Blob(parts));
+    const bundle = new Blob(parts);
+    const book = await addBundle(bundle);
+
+    /* Put a real file in Downloads as well.
+     *
+     * The kept copy below lives in origin-private storage: the reader can
+     * open it, and nothing else can — not you, not another browser, and not
+     * after you clear site data. A .spinebook in your downloads folder is
+     * the copy you actually own, and it is the only one that survives
+     * switching browsers or moving to another machine.
+     *
+     * An <a download> click rather than showSaveFilePicker, which is
+     * Chromium-only: this works the same on Safari, Firefox and iOS, which
+     * is the whole point of the web reader. The object URL is revoked on a
+     * timer, not immediately — revoking it straight away cancels the write
+     * on a large file, and these are hundreds of megabytes.
+     */
+    try {
+      const safe = (book.title || "book").replace(/[^\w\- ]+/g, "").trim() || "book";
+      const url = URL.createObjectURL(bundle);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safe}.spinebook`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+      book.savedAs = `${safe}.spinebook`;
+    } catch (e) {
+      // A browser is entitled to refuse a download it did not see you ask
+      // for. Not fatal — the book is already in the library.
+    }
+
+    /* Keep it, without being asked. Every other way a book arrives here
+       leaves you something to fall back on: you picked a file, so you can
+       pick it again. A book that came from a code has no file behind it —
+       the audio is a Blob in memory, the tab is allowed to drop it, and the
+       only source was a URL that stops working after a few hours. Close the
+       tab tomorrow and you would have the transcript, no audio, and no way
+       left to get it.
+
+       So this is the one route where "Keep offline" is not a preference.
+       Best effort: if there is no room, or the browser has no OPFS, the book
+       still opens for this session and the reader is told rather than left
+       to find out later. */
+    const blob = attached.get(book.id);
+    if (canKeep() && blob) {
+      try {
+        await askPersist();
+        await keepCopy(book.id, blob);
+      } catch (e) {
+        // Reported rather than swallowed: the book plays now and will be
+        // gone after a reload, and that is worth knowing while the code
+        // still works.
+        book.keepFailed = (e && e.message) || "no room on this device";
+      }
+    } else if (!canKeep()) {
+      book.keepFailed = "this browser cannot store it";
+    }
+    return book;
   }
 
   /* --------------------------------------------------------- the shelf */
