@@ -3254,7 +3254,35 @@ function offerUpdate(u) {
 
 
 /* Makes this openable from a home screen and openable offline. Registered
-   last so a browser without it still runs everything above. */
+   last so a browser without it still runs everything above.
+
+   The shell is served cache-first, which is what lets it open with no
+   network — and it means the page you are looking at goes on being the old
+   one after a release, even once the new worker has quietly installed
+   underneath it. Bumping VERSION in sw.js is only half the job: it gets the
+   *next* load right and leaves this one stale. That is not a hypothetical,
+   it is how the code box appeared to be missing from a site that was
+   serving it correctly.
+
+   So: when a new worker takes over, reload once. `controllerchange` fires
+   exactly then, and the guard is because a reload that races the handover
+   would fire it again. The very first load also fires it — the page starts
+   uncontrolled and the fresh worker claims it — and there is nothing stale
+   to replace in that case, so it is skipped. */
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
-  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  addEventListener("load", () => {
+    const wasControlled = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!wasControlled || reloading) return;
+      // Never pull the page out from under someone mid-book. A reload would
+      // resume from the saved position, but it would still stop the voice
+      // in the middle of a sentence for a cosmetic update — and the next
+      // time they open it they get the new version regardless.
+      if (typeof audio !== "undefined" && audio && !audio.paused) return;
+      reloading = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
 }
