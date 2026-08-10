@@ -1897,6 +1897,33 @@ function snapToPlayhead(behavior) {
 }
 $("jumpNow").onclick = () => snapToPlayhead();
 
+/* Snap to the voice whenever the page comes back into view.
+
+   Reported twice: leave the Android app, come back, and the text is no
+   longer with the audio. The scroll-detector fix stopped `follow` being
+   switched off by a phantom scroll, but that only keeps following *armed* —
+   the page still does not move until the playhead crosses into the next
+   word, and setNow() only scrolls on a change. After a spell in the
+   background the right word is already lit, far below the viewport, and
+   nothing has changed for it to react to.
+
+   So say it outright rather than infer it. Coming back is a moment where
+   you want to be shown where you are, and so is opening a book, and so is
+   switching between the reader and the pop-out. Instant, not smooth: after
+   a gap the distance is screens, and animating it reads as the page
+   crawling. */
+function snapOnReturn() {
+  if (!book) return;
+  follow = true;
+  browseT = audio.currentTime;
+  snapToPlayhead("instant");
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) setTimeout(snapOnReturn, 60);
+});
+addEventListener("pageshow", () => setTimeout(snapOnReturn, 60));
+
+
 /* ------------------------------------------------- transport swipe tray */
 
 /* On a phone the transport shows only the five arrows; the rest of the
