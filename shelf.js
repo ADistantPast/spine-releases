@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.33";
+  const WEB_VERSION = "1.0.34";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";

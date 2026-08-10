@@ -69,7 +69,10 @@ button{
   padding:20px 34px 16px;border-bottom:1px solid var(--hair);
   flex:0 0 auto;   /* or a narrow screen squeezes it below its own content */
 }
-.bar-title{min-width:0}
+/* The title yields before the tools do, but not all the way to nothing:
+   without a floor a 900px window took it to 0px and spilled the metadata
+   line above it over five rows. */
+.bar-title{min-width:0;flex:1 1 auto}
 h1{
   margin:0;font-size:21px;font-weight:600;letter-spacing:.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46ch;
@@ -79,9 +82,16 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .bar-sub{
   /* sits above the title now, so the spacing hangs below it instead */
   margin:0 0 3px;font-family:var(--data);font-size:11px;
+  /* one line, clipped: it is duration, chapter count and language, and
+     wrapping it stacks the whole bar taller for information nobody reads
+     twice */
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   letter-spacing:.06em;text-transform:uppercase;color:var(--dust);
 }
-.bar-tools{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+/* Shrinkable, and .find is the only thing inside it that gives — the
+   buttons are all flex:0 0 auto. So a narrow window narrows the search box,
+   which holds nothing but a placeholder, rather than the book's title. */
+.bar-tools{display:flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0}
 
 .btn{
   padding:8px 14px;border-radius:6px;font-size:13px;
@@ -100,8 +110,9 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .btn.ghost:hover{border-color:var(--dust);filter:none}
 .btn.ghost:active{background:var(--slab-2);border-color:var(--dust);filter:none}
 
+.find{flex:0 1 auto;min-width:0}
 .find input{
-  width:210px;padding:8px 12px;border-radius:6px;
+  width:210px;max-width:100%;padding:8px 12px;border-radius:6px;
   background:var(--slab);border:1px solid var(--hair);
   color:var(--bone);font-size:13px;font-family:inherit;
 }
@@ -1083,6 +1094,12 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   /* clears the status bar, and the notch when the phone is sideways */
   .bar{flex-direction:column;align-items:stretch;gap:12px;
     padding:calc(20px + var(--safe-t)) calc(22px + var(--safe-r)) 16px calc(22px + var(--safe-l))}
+  /* Back to the bar's own top-right corner. Here the corner really is empty
+     — the bar is a column — and in flow the pill would take a whole line of
+     its own above the search box, which is what it did when this rule was
+     missing. */
+  .sync{position:absolute;top:calc(18px + var(--safe-t));right:calc(22px + var(--safe-r));margin-bottom:0}
+  .bar-title{padding-right:74px}
   /* Thumb-sized, matching .lib-actions .row-go below. The hint takes its own
      line: measured at 375px it was ellipsised down to "Hold a bo…" sharing
      one with the select. */
@@ -1298,7 +1315,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .code-in::placeholder{color:var(--dust);opacity:.55;text-transform:none}
 
 .share-code{
-  margin:6px 0 16px;font-family:var(--data);font-size:19px;
+  margin:0 0 3px;padding:0 10px;font-family:var(--data);font-size:19px;
   color:var(--verdigris);letter-spacing:.08em;word-break:break-all;
   /* selectable on purpose: copy may be refused and this is the fallback */
   user-select:all;
@@ -1312,13 +1329,27 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 
 /* ------------------------------------------------- syncing between devices
  *
- * Absolutely positioned in the bar's empty top-right rather than added to
- * its flex row: as a third child it was pushed onto its own line under the
- * buttons. Same reasoning as the series editor — a control dropped into an
- * existing row must not rearrange the row.
+ * Two placements, because the bar has two shapes.
+ *
+ * On the wide bar the pill is a real member of the row, in the gap between
+ * the title and the tools: the row reaches the right edge there, so anything
+ * absolutely positioned in the "empty" top-right lands on top of Import.
+ * .bar-title takes the slack, so the pill sits against the tools rather
+ * than floating in the middle of the bar, and the title ellipsises into
+ * whatever is left exactly as it already did.
+ *
+ * Below the breakpoint the bar is a column and its top-right genuinely is
+ * empty, so it stays pinned there — which is also what keeps it off the
+ * wrapped button rows. It was pinned at every width before, and that is
+ * what overlapped.
  */
 .bar{position:relative}
-.sync{position:absolute;top:18px;right:34px;z-index:5}
+.bar-title{flex:1 1 auto}
+.sync{position:relative;order:1;flex:0 0 auto;margin-bottom:5px;z-index:5}
+.bar-tools{order:2}
+/* The pop-out keeps the title, the sentences and the arrow row. Its bar is a
+   few hundred pixels wide and already carries Close on the right. */
+.app.compact .sync{display:none}
 .sync-btn{
   display:inline-flex;align-items:center;gap:7px;
   padding:5px 11px;border-radius:999px;
@@ -1345,18 +1376,29 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   padding:12px 12px 14px;box-shadow:0 12px 34px rgba(0,0,0,.5);
   font-size:12px;color:var(--dust);line-height:1.5;
 }
-.sync-pop .hint{padding:0 0 6px}
+/* A <p> keeps its 1em margins unless something says otherwise, and nothing
+   here did: the first line of the panel sat 25px below the top edge while
+   the rest of the panel was spaced at 6-10px. Reported as too much padding
+   above "This device is called". One rhythm now, set here rather than by
+   whatever each element's default happens to be. */
+.sync-pop p{margin:0}
+.sync-pop .hint{padding:0 0 5px}
+.sync-pop .hint + .hint{padding-top:8px}
 .sync-pop input{
   width:100%;background:var(--ink);border:1px solid var(--hair);border-radius:5px;
   color:var(--bone);padding:6px 8px;font-family:var(--data);font-size:11.5px;
 }
 .sync-pop input:focus{outline:none;border-color:var(--verdigris)}
-.sync-pop .sync-row{display:flex;gap:6px;margin:6px 0 10px}
+.sync-pop .sync-row{display:flex;gap:6px;margin:10px 0}
 .sync-pop .btn{padding:6px 10px;font-size:11px;flex:0 0 auto}
-.sync-when{color:var(--bone);font-size:12px;margin:0 0 10px}
+.sync-when{color:var(--bone);font-size:12px;margin:10px 0 0}
+/* How many books the shared record holds. Zero here on a device that has
+   pushed some is the visible form of "these two devices are on different
+   codes", which otherwise looks exactly like syncing quietly doing nothing. */
+.sync-count{color:var(--dust);font-size:11.5px;line-height:1.5;margin:4px 0 0}
 .sync-code{
   font-family:var(--data);font-size:12px;color:var(--verdigris);
-  letter-spacing:.05em;word-break:break-all;user-select:all;margin:2px 0 10px;
+  letter-spacing:.05em;word-break:break-all;user-select:all;margin:0;
 }
 .sync-pair{border-top:1px solid var(--hair);margin-top:10px;padding-top:10px}
 .sync-pair select{

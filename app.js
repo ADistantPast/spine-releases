@@ -3386,10 +3386,14 @@ function syncPopHtml() {
     <p class="hint">This device is called</p>
     <input id="syncDevice" value="${esc(s.device || "")}" placeholder="Desktop"
            maxlength="40" spellcheck="false">
-    <p class="sync-when" style="margin-top:10px">
-      ${s.lost ? "The record is gone from the service."
+    <p class="sync-when">
+      ${s.busy ? "Syncing…"
+               : s.lost ? "The record is gone from the service."
                : `Last synced ${esc(syncWhen(s.last))}${s.lastBy ? " by " + esc(s.lastBy) : ""}.`}
     </p>
+    ${s.lost ? "" : `<p class="sync-count">${s.shared === undefined ? ""
+      : s.shared ? `Sharing ${s.shared} book${s.shared === 1 ? "" : "s"} with your other devices.`
+                 : "Nothing shared yet — press sync, or check the other device is on this same code."}</p>`}
     ${s.lost
       ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>
          <p class="hint">Your positions are kept here and carry over. The other
@@ -3430,17 +3434,32 @@ function openSyncPop() {
     toast(`New code made, carrying ${r.carried} books.`);
     await refreshSync(); openSyncPop();
   });
-  $("syncGo")?.addEventListener("click", async () => {
-    $("syncWrap").className = "sync busy";
-    $("syncLabel").textContent = "Syncing";
-    const r = await syncApi("/api/sync/now", {});
-    await refreshSync();
-    if (r.error) return toast(r.error);
-    if (r.lost) { openSyncPop(); return toast("The sync record has gone."); }
-    const n = (r.pulled || []).length;
-    toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
-    renderPairs(r.unmatched || []);
-  });
+  $("syncGo")?.addEventListener("click", runSync);
+}
+
+/* The sync itself, from the dot or from the button in the panel. Guarded by
+   syncBusy: pressing the dot starts one, and pressing "Sync now" a moment
+   later must not start a second against the same record — the two would
+   race for the same ETag and one of them would be told to try again. */
+let syncBusy = false;
+
+async function runSync() {
+  if (syncBusy) return;
+  syncBusy = true;
+  $("syncWrap").className = "sync busy";
+  $("syncLabel").textContent = "Syncing";
+  syncInfo.busy = true;
+  if (!$("syncPop").hidden) openSyncPop();
+  let r;
+  try { r = await syncApi("/api/sync/now", {}); }
+  finally { syncBusy = false; syncInfo.busy = false; }
+  await refreshSync();
+  if (!$("syncPop").hidden) openSyncPop();
+  if (!r || r.error) return toast((r && r.error) || "Could not sync.");
+  if (r.lost) return toast("The sync record has gone.");
+  const n = (r.pulled || []).length;
+  toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
+  renderPairs(r.unmatched || []);
 }
 
 /* Books the other device has that nothing here answers to. Suggested by
@@ -3470,11 +3489,23 @@ function renderPairs(list) {
 
 const closeSyncPop = () => { const p = $("syncPop"); if (p) p.hidden = true; };
 
-$("syncDot").onclick = async e => {
+/* One press: the panel opens on what is already known, and the sync it
+   promises starts behind it.
+
+   It used to await /api/sync before drawing anything — half a second on a
+   real library — and then only open a panel, leaving the actual syncing to
+   a second press on a button inside it. Both halves were reported: the
+   press felt slow, and a code was made and never used because pressing the
+   dot appeared to do nothing. */
+$("syncDot").onclick = e => {
   e.stopPropagation();
   if (!$("syncPop").hidden) return closeSyncPop();
-  await refreshSync();
-  openSyncPop();
+  openSyncPop();                     // instant, from what the dot already knows
+  refreshSync().then(() => {
+    if ($("syncPop").hidden) return;
+    openSyncPop();                   // redrawn with the fresh reading
+    if (syncInfo.code && !syncInfo.lost) runSync();
+  });
 };
 // anywhere else dismisses it, which is the whole of its dismiss behaviour
 document.addEventListener("click", e => {
@@ -3495,7 +3526,11 @@ addEventListener("load", refreshSync);
 let syncedChapter = -1;
 
 async function quietSync() {
-  if (!syncInfo.code || syncInfo.lost || quietSync.busy) return;
+  // syncBusy as well as its own flag: the dot now starts a sync when it is
+  // pressed, and a chapter ending a second later must not start a second
+  // one against the same record — they would race for the same ETag and one
+  // would be told to try again, for nothing.
+  if (!syncInfo.code || syncInfo.lost || quietSync.busy || syncBusy) return;
   quietSync.busy = true;
   try { await syncApi("/api/sync/now", {}); await refreshSync(); }
   catch (e) { /* offline is not worth interrupting a book for */ }
