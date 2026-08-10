@@ -912,6 +912,7 @@ function frame() {
       if (i !== nowIdx) setNow(i);
     }
     checkSleep();
+    syncOnChapter(t);
   }
   requestAnimationFrame(frame);
 }
@@ -3321,4 +3322,376 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
     });
     navigator.serviceWorker.register("sw.js").catch(() => {});
   });
+}
+
+/* ---------------------------------------------------- syncing your place
+ *
+ * A dot in the bar's top-right: verdigris and slowly pulsing when what is
+ * here has been sent, oxide and pulsing faster when it has not, red when the
+ * record has gone from the service. Tapping it opens the panel; tapping
+ * anywhere else closes it.
+ *
+ * Nothing happens on a timer. Pressing the dot is the whole mechanism, so
+ * between presses the service hears nothing at all — see the sync section of
+ * app.py for why that was the point.
+ */
+let syncInfo = { };
+
+function syncWhen(t) {
+  if (!t) return "never";
+  const d = new Date(t * 1000), now = Date.now() / 1000;
+  const mins = Math.round((now - t) / 60);
+  const clock = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago, ${clock}`;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? `today at ${clock}`
+                 : `${d.toLocaleDateString()} at ${clock}`;
+}
+
+async function refreshSync() {
+  const wrap = $("syncWrap");
+  if (!wrap) return;
+  /* A backend that has no /api/sync yet hides the dot rather than offering a
+     button that errors. Android's LocalServer does not serve these routes
+     yet; the moment it does, the dot appears with no other change. */
+  try {
+    syncInfo = await syncApi("/api/sync");
+    if (!syncInfo || syncInfo.error) throw new Error("no sync here");
+  } catch (e) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const state = !syncInfo.code ? "" : syncInfo.lost ? "lost"
+              : syncInfo.dirty ? "dirty" : "ok";
+  wrap.className = "sync" + (state ? " " + state : "");
+  $("syncLabel").textContent = !syncInfo.code ? "Sync"
+    : syncInfo.lost ? "Code lost" : syncInfo.dirty ? "Unsynced" : "Synced";
+}
+
+function syncPopHtml() {
+  const s = syncInfo;
+  if (!s.code) return `
+    <p class="hint">Keep your place in step across your devices. One code,
+      shared between them; nothing is sent until you press this.</p>
+    <div class="sync-row">
+      <button class="btn" id="syncNew">Start a code</button>
+      <button class="btn ghost" id="syncJoinBtn">I have one</button>
+    </div>
+    <div id="syncJoinBox" hidden>
+      <input id="syncJoinCode" placeholder="0000-0000-0000-0000-0000-0000-00"
+             spellcheck="false" autocomplete="off">
+      <div class="sync-row"><button class="btn" id="syncJoinGo">Join</button></div>
+    </div>`;
+
+  return `
+    <p class="hint">This device is called</p>
+    <input id="syncDevice" value="${esc(s.device || "")}" placeholder="Desktop"
+           maxlength="40" spellcheck="false">
+    <p class="sync-when" style="margin-top:10px">
+      ${s.lost ? "The record is gone from the service."
+               : `Last synced ${esc(syncWhen(s.last))}${s.lastBy ? " by " + esc(s.lastBy) : ""}.`}
+    </p>
+    ${s.lost
+      ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>
+         <p class="hint">Your positions are kept here and carry over. The other
+           devices will need the new code.</p>`
+      : `<div class="sync-row">
+           <button class="btn" id="syncGo">Sync now</button>
+           <button class="btn ghost" id="syncForget">Forget</button>
+         </div>`}
+    <p class="hint">Your code</p>
+    <p class="sync-code">${esc(s.code)}</p>
+    <div id="syncPairs"></div>`;
+}
+
+function openSyncPop() {
+  const pop = $("syncPop");
+  pop.innerHTML = syncPopHtml();
+  pop.hidden = false;
+
+  $("syncNew")?.addEventListener("click", async () => {
+    const r = await syncApi("/api/sync/new", {});
+    if (r.error) return toast(r.error);
+    await refreshSync(); openSyncPop();
+  });
+  $("syncJoinBtn")?.addEventListener("click", () => { $("syncJoinBox").hidden = false; });
+  $("syncJoinGo")?.addEventListener("click", async () => {
+    const r = await syncApi("/api/sync/join", { code: $("syncJoinCode").value });
+    if (r.error) return toast(r.error);
+    await refreshSync(); openSyncPop();
+  });
+  $("syncDevice")?.addEventListener("change", e =>
+    syncApi("/api/sync/name", { name: e.target.value }));
+  $("syncForget")?.addEventListener("click", async () => {
+    await syncApi("/api/sync/forget", {}); await refreshSync(); closeSyncPop();
+  });
+  $("syncRebuild")?.addEventListener("click", async () => {
+    const r = await syncApi("/api/sync/rebuild", {});
+    if (r.error) return toast(r.error);
+    toast(`New code made, carrying ${r.carried} books.`);
+    await refreshSync(); openSyncPop();
+  });
+  $("syncGo")?.addEventListener("click", async () => {
+    $("syncWrap").className = "sync busy";
+    $("syncLabel").textContent = "Syncing";
+    const r = await syncApi("/api/sync/now", {});
+    await refreshSync();
+    if (r.error) return toast(r.error);
+    if (r.lost) { openSyncPop(); return toast("The sync record has gone."); }
+    const n = (r.pulled || []).length;
+    toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
+    renderPairs(r.unmatched || []);
+  });
+}
+
+/* Books the other device has that nothing here answers to. Suggested by
+   duration, because two rips of one audiobook agree to within a second while
+   a title is editable and shared across a series. */
+function renderPairs(list) {
+  const box = $("syncPairs");
+  if (!box || !list.length) { if (box) box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="sync-pair">
+    <p class="hint">On your other device, but not matched here</p>
+    ${list.map((u, i) => `
+      <p class="sync-when">${esc(u.name || "Untitled")}</p>
+      <select data-slot="${esc(u.slot)}">
+        <option value="">Not one of mine</option>
+        ${(u.suggest || []).map(s =>
+          `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join("")}
+        ${libraryItems.filter(b => !(u.suggest || []).some(s => s.id === b.id))
+          .map(b => `<option value="${esc(b.id)}">${esc(b.title)}</option>`).join("")}
+      </select>`).join("")}
+  </div>`;
+  box.querySelectorAll("select").forEach(sel => sel.onchange = async () => {
+    if (!sel.value) return;
+    await syncApi("/api/sync/pair", { id: sel.value, slot: sel.dataset.slot });
+    toast("Paired. It will follow from now on.");
+  });
+}
+
+const closeSyncPop = () => { const p = $("syncPop"); if (p) p.hidden = true; };
+
+$("syncDot").onclick = async e => {
+  e.stopPropagation();
+  if (!$("syncPop").hidden) return closeSyncPop();
+  await refreshSync();
+  openSyncPop();
+};
+// anywhere else dismisses it, which is the whole of its dismiss behaviour
+document.addEventListener("click", e => {
+  if (!$("syncPop").hidden && !e.target.closest("#syncWrap")) closeSyncPop();
+});
+addEventListener("load", refreshSync);
+
+/* A sync when a chapter ends, and when you press the dot. Nothing else.
+
+   Chapters are the right boundary: two or three an hour on an audiobook,
+   against a dozen for pausing, and it is the moment your place in the book
+   genuinely settles. A timer was rejected because a schedule hands a host a
+   log of when you listen; this is quiet enough to keep most of that while
+   meaning the other device is usually already right before you pick it up.
+
+   The first chapter seen after opening a book does not sync — that would
+   fire on every open, which is a timer wearing a different hat. */
+let syncedChapter = -1;
+
+async function quietSync() {
+  if (!syncInfo.code || syncInfo.lost || quietSync.busy) return;
+  quietSync.busy = true;
+  try { await syncApi("/api/sync/now", {}); await refreshSync(); }
+  catch (e) { /* offline is not worth interrupting a book for */ }
+  quietSync.busy = false;
+}
+
+function syncOnChapter(t) {
+  if (!book || !syncInfo.code) return;
+  const chs = book.chapters || [];
+  if (chs.length < 2) return;
+  let i = -1;
+  for (let k = 0; k < chs.length; k++) if (chs[k].t <= t) i = k;
+  if (i === syncedChapter) return;
+  if (syncedChapter !== -1) quietSync();   // crossed one, rather than arrived
+  syncedChapter = i;
+}
+
+/* ------------------------------------------- sync where the server has none
+ *
+ * The desktop answers /api/sync itself, and the web reader answers it in
+ * shelf.js. Android does neither: its page talks to LocalServer, which has
+ * no such route. So the page does it, and — this is the part that makes it
+ * small — it needs no storage of its own. Everything it wants is already a
+ * route the phone serves: /api/library carries every book's position,
+ * duration and positionAt, /api/position writes one back, and
+ * /api/syncslot remembers a pairing.
+ *
+ * Native was never necessary here, unlike sharing. A bundle is hundreds of
+ * megabytes and has to be handled where the storage is; a sync record is a
+ * few hundred bytes and jsonblob answers Access-Control-Allow-Origin:*, so
+ * the page can fetch and PUT it directly.
+ *
+ * syncApi() prefers the backend and falls back to this. It decides once:
+ * a server without the route makes api() throw, which is unambiguous, and
+ * after that there is no point asking again.
+ */
+const SYNC_AT = "https://jsonblob.com/api/jsonBlob/{id}";
+const SYNC_NEW = "https://jsonblob.com/api/jsonBlob";
+const SYNC_LS = "spine.sync";
+const SYNC_B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const SYNC_NEAR = 3.0;          // two rips of one book agree within a second
+
+let syncBackend = null;         // null unknown, true theirs, false ours
+
+async function syncApi(path, body) {
+  if (syncBackend !== false) {
+    try {
+      const r = await api(path, body);
+      if (r && typeof r === "object") { syncBackend = true; return r; }
+    } catch (e) { /* no such route here */ }
+    syncBackend = false;
+  }
+  return localSync(path, body);
+}
+
+const lsSync = () => { try { return JSON.parse(localStorage.getItem(SYNC_LS)) || {}; }
+                       catch (e) { return {}; } };
+const lsSave = s => localStorage.setItem(SYNC_LS, JSON.stringify(s));
+const lsDevice = () => (lsSync().device || "").trim() || "This device";
+
+function lsCode(uuid) {
+  let n = BigInt("0x" + uuid.replace(/-/g, "")), out = "";
+  for (let i = 0; i < 26; i++) { out = SYNC_B32[Number(n & 31n)] + out; n >>= 5n; }
+  return out.match(/.{1,4}/g).join("-");
+}
+function lsBlob(code) {
+  const clean = (code || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+  if (clean.length !== 26) throw new Error("That sync code is not the right length.");
+  let n = 0n;
+  for (const raw of clean) {
+    const ch = { I: "1", L: "1", O: "0", U: "0" }[raw] || raw;
+    const v = SYNC_B32.indexOf(ch);
+    if (v < 0) throw new Error('"' + raw + '" is not part of a Spine code.');
+    n = (n << 5n) | BigInt(v);
+  }
+  const h = n.toString(16).padStart(32, "0").slice(-32);
+  return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20)].join("-");
+}
+
+/* Conditional writes, as in app.py and shelf.js: the tag from the read is
+   sent back with the write, so a stale read is refused rather than allowed
+   to overwrite a fresher one. Losing the race asks for another press, which
+   is the honest answer — the other device's reading is as real as ours. */
+let lsTag = "";
+async function lsGet(id) {
+  const r = await fetch(SYNC_AT.replace("{id}", id));
+  if (r.status === 404 || r.status === 410) { const e = new Error("lost"); e.lost = true; throw e; }
+  if (r.status === 429) throw new Error("The sync service is asking us to slow down. Try again in a minute.");
+  if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
+  lsTag = r.headers.get("ETag") || "";
+  return r.json();
+}
+async function lsPut(id, payload) {
+  const headers = { "Content-Type": "application/json" };
+  if (lsTag) headers["If-Match"] = lsTag;
+  const r = await fetch(SYNC_AT.replace("{id}", id), {
+    method: "PUT", headers, body: JSON.stringify(payload) });
+  if (r.status === 412 || r.status === 429)
+    throw new Error("Another device synced while this one was working. Press sync again.");
+  if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
+}
+async function lsNew(books) {
+  const r = await fetch(SYNC_NEW, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ v: 1, books: books || {} }) });
+  const id = (r.headers.get("Location") || "").replace(/\/$/, "").split("/").pop();
+  if (!id) throw new Error("The sync service did not give us a place to put it.");
+  return id;
+}
+
+async function localSync(path, body) {
+  const s = lsSync();
+  const rest = path.replace("/api/sync", "").replace(/^\//, "");
+  const shelf = await api("/api/library");
+  const slots = {};
+  for (const b of shelf) slots[b.syncSlot || b.id] = b;
+
+  if (!rest) {
+    const dirty = shelf.some(b => (b.positionAt || 0) > (s.last || 0));
+    return { code: s.id ? lsCode(s.id) : null, device: s.device || "",
+             last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
+             dirty: !!s.id && dirty, books: shelf.length };
+  }
+  if (rest === "name") { s.device = String(body.name || "").trim().slice(0, 40); lsSave(s);
+                         return { device: lsDevice() }; }
+  if (rest === "forget") { localStorage.removeItem(SYNC_LS); return { ok: true }; }
+  if (rest === "new") {
+    try { lsSave({ id: await lsNew(), last: 0, device: s.device || "" });
+          return { code: lsCode(lsSync().id) }; }
+    catch (e) { return { error: e.message }; }
+  }
+  if (rest === "join") {
+    try { const id = lsBlob(body.code); await lsGet(id);
+          lsSave({ id, last: 0, device: s.device || "" }); return { code: lsCode(id) }; }
+    catch (e) { return { error: e.lost ? "There is nothing at that code any more." : e.message }; }
+  }
+  if (rest === "rebuild") {
+    try { s.id = await lsNew(s.mirror || {}); s.lost = false; lsSave(s);
+          return { code: lsCode(s.id), carried: Object.keys(s.mirror || {}).length }; }
+    catch (e) { return { error: e.message }; }
+  }
+  if (rest === "pair") {
+    await api("/api/syncslot/" + body.id, { slot: body.slot || "" });
+    return { ok: true };
+  }
+  if (rest === "now") {
+    if (!s.id) return { error: "No sync code yet." };
+    const now = Math.floor(Date.now() / 1000);
+    let remote;
+    try { remote = (await lsGet(s.id)).books || {}; }
+    catch (e) {
+      if (!e.lost) return { error: e.message };
+      s.lost = true; lsSave(s);
+      return { lost: true, carried: Object.keys(s.mirror || {}).length,
+               error: "The sync record is gone from the service." };
+    }
+
+    const who = lsDevice(), pulled = [];
+    for (const slot of Object.keys(slots)) {
+      const b = slots[slot];
+      const mine = { name: b.title || "", pos: +(b.position || 0),
+                     dur: +(b.duration || 0), at: b.positionAt || 0, by: who };
+      const theirs = remote[slot];
+      /* Newest wins, per book. Not furthest: going back to re-hear a chapter
+         is deliberate and must not be undone by a stale reading. */
+      if (theirs && (theirs.at || 0) > mine.at) {
+        await api("/api/position/" + b.id, { t: +(theirs.pos || 0) });
+        pulled.push(b.title || slot);
+        // the write stamps its own positionAt, so this device is now the
+        // most recent writer — which is true, and keeps the record honest
+        remote[slot] = { ...theirs, at: Math.floor(Date.now() / 1000), by: who };
+      } else {
+        if (!theirs || mine.at > (theirs.at || 0)) remote[slot] = mine;
+      }
+    }
+    for (const b of shelf) if (b.syncSlot && b.syncSlot !== b.id) delete remote[b.id];
+
+    try { await lsPut(s.id, { v: 1, books: remote }); }
+    catch (e) { return { error: e.message }; }
+
+    const all = Object.keys(remote).map(k => remote[k]);
+    s.last = Math.max.apply(null, [now].concat(all.map(e => e.at || 0)));
+    s.mirror = remote;
+    s.lost = false;
+    s.lastBy = (all.slice().sort((a, c) => (c.at || 0) - (a.at || 0))[0] || {}).by || who;
+    lsSave(s);
+
+    const free = shelf.filter(b => !b.syncSlot);
+    const unmatched = Object.keys(remote).filter(k => !slots[k]).map(slot => {
+      const e = remote[slot];
+      return { slot, name: e.name || "", pos: e.pos || 0, dur: e.dur || 0,
+               suggest: free
+                 .filter(b => e.dur && Math.abs((b.duration || 0) - e.dur) <= SYNC_NEAR)
+                 .slice(0, 4).map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
+    });
+    return { ok: true, last: s.last, by: s.lastBy, pulled, pushed: [], unmatched };
+  }
+  return { error: "No such sync route." };
 }

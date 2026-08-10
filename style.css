@@ -1309,3 +1309,57 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    one would only be a worse version of a control the OS already draws. */
 .expiry-row{display:flex;align-items:center;gap:10px;cursor:pointer}
 .expiry-row input{accent-color:var(--verdigris);margin:0}
+
+/* ------------------------------------------------- syncing between devices
+ *
+ * Absolutely positioned in the bar's empty top-right rather than added to
+ * its flex row: as a third child it was pushed onto its own line under the
+ * buttons. Same reasoning as the series editor — a control dropped into an
+ * existing row must not rearrange the row.
+ */
+.bar{position:relative}
+.sync{position:absolute;top:18px;right:34px;z-index:5}
+.sync-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:5px 11px;border-radius:999px;
+  border:1px solid var(--hair);background:var(--ink-2);
+  font-family:var(--ui);font-size:11px;letter-spacing:.02em;color:var(--dust);
+}
+.sync-btn:hover{border-color:var(--dust)}
+.sync-led{width:7px;height:7px;border-radius:50%;background:var(--dust);flex:0 0 auto}
+
+/* Pulsing on opacity and scale, not a coloured glow: the glow would need to
+   know its own colour, and three states would mean three keyframes. */
+@keyframes syncpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.72)}}
+.sync.ok    .sync-led{background:var(--verdigris);animation:syncpulse 2.4s ease-in-out infinite}
+.sync.ok    .sync-btn{color:var(--verdigris);border-color:rgba(95,211,196,.35)}
+.sync.dirty .sync-led{background:var(--oxide);animation:syncpulse 1.3s ease-in-out infinite}
+.sync.dirty .sync-btn{color:var(--oxide);border-color:rgba(192,103,74,.4)}
+.sync.lost  .sync-led{background:var(--flag)}
+.sync.lost  .sync-btn{color:var(--flag);border-color:rgba(210,84,75,.45)}
+.sync.busy  .sync-led{background:var(--dust);animation:syncpulse .7s linear infinite}
+
+.sync-pop{
+  position:absolute;top:calc(100% + 8px);right:0;width:296px;
+  background:var(--slab);border:1px solid var(--hair);border-radius:8px;
+  padding:12px 12px 14px;box-shadow:0 12px 34px rgba(0,0,0,.5);
+  font-size:12px;color:var(--dust);line-height:1.5;
+}
+.sync-pop .hint{padding:0 0 6px}
+.sync-pop input{
+  width:100%;background:var(--ink);border:1px solid var(--hair);border-radius:5px;
+  color:var(--bone);padding:6px 8px;font-family:var(--data);font-size:11.5px;
+}
+.sync-pop input:focus{outline:none;border-color:var(--verdigris)}
+.sync-pop .sync-row{display:flex;gap:6px;margin:6px 0 10px}
+.sync-pop .btn{padding:6px 10px;font-size:11px;flex:0 0 auto}
+.sync-when{color:var(--bone);font-size:12px;margin:0 0 10px}
+.sync-code{
+  font-family:var(--data);font-size:12px;color:var(--verdigris);
+  letter-spacing:.05em;word-break:break-all;user-select:all;margin:2px 0 10px;
+}
+.sync-pair{border-top:1px solid var(--hair);margin-top:10px;padding-top:10px}
+.sync-pair select{
+  width:100%;background:var(--ink);border:1px solid var(--hair);border-radius:5px;
+  color:var(--bone);font-family:var(--ui);font-size:11px;padding:4px 6px;margin-top:4px;
+}

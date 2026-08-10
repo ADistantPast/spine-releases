@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.32";
+  const WEB_VERSION = "1.0.33";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -669,6 +669,10 @@
           b.status = ["reading","paused","completed","dropped"].includes(want) ? want : "";
         }
         else b[head] = body.t;          // position, bookmark, offset
+        // When, not just where. Sync merges newest-wins per book and
+        // position alone cannot say whether 40 minutes in is newer
+        // than 20. Mirrors set_position() in app.py.
+        if (head === "position") b.positionAt = Math.floor(Date.now() / 1000);
         b.updated = Date.now() / 1000;
         await putBook(b);
         return head === "chapters" ? { chapters: b.chapters }
@@ -678,8 +682,224 @@
              : head === "status" ? { status: b.status }
              : { [head]: b[head] };
       }
+
+      // Answered locally, but with the same shape app.py returns, so the
+      // dot and its panel are the same code on every platform.
+      case "sync": return syncRoute(rest, post, body);
     }
+
     return { error: `The web reader has no ${url}.` };
+  }
+
+  /* ------------------------------------------------- syncing your place
+   *
+   * The same endpoints app.py serves, answered locally, so the dot and its
+   * panel are literally the same code on every platform.
+   *
+   * JavaScript rather than native, unlike sharing. A bundle is hundreds of
+   * megabytes and has to be handled where the storage is; a sync record is a
+   * few hundred bytes and jsonblob answers Access-Control-Allow-Origin:*, so
+   * the page can fetch and PUT it directly. That is what lets the phone and
+   * the web reader share one implementation instead of keeping a third
+   * language byte-identical with the other two.
+   *
+   * Per-device state lives in localStorage on purpose: your code and this
+   * device's name are yours, not the book's, and must never travel inside a
+   * .spinebook. Same reasoning as the folded-series set and the shelf order.
+   */
+  const SYNC_AT = "https://jsonblob.com/api/jsonBlob/{id}";
+  const SYNC_NEW = "https://jsonblob.com/api/jsonBlob";
+  const SYNC_KEY = "spine.sync";
+  // B32 is the Crockford alphabet already declared for the share codes above
+  // — the same one, deliberately, so both kinds of code forgive the same slips.
+  const MATCH_ON_DURATION = 3.0;      // two rips of one book agree within a second
+
+  const syncState = () => {
+    try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; }
+    catch (e) { return {}; }
+  };
+  const saveSync = s => localStorage.setItem(SYNC_KEY, JSON.stringify(s));
+  const deviceName = () => (syncState().device || "").trim() || "This device";
+
+  /* 16 bytes as 26 Crockford characters, matching sync_code() in app.py —
+     including forgiving a typed O for 0, since these are read off a screen. */
+  function syncCode(uuid) {
+    let n = BigInt("0x" + uuid.replace(/-/g, "")), out = "";
+    for (let i = 0; i < 26; i++) { out = B32[Number(n & 31n)] + out; n >>= 5n; }
+    return out.match(/.{1,4}/g).join("-");
+  }
+  function syncBlobId(code) {
+    const clean = (code || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+    if (clean.length !== 26) throw new Error("That sync code is not the right length.");
+    let n = 0n;
+    for (const raw of clean) {
+      const ch = { I: "1", L: "1", O: "0", U: "0" }[raw] || raw;
+      const v = B32.indexOf(ch);
+      if (v < 0) throw new Error('"' + raw + '" is not part of a Spine code.');
+      n = (n << 5n) | BigInt(v);
+    }
+    const h = n.toString(16).padStart(32, "0").slice(-32);
+    return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16),
+            h.slice(16, 20), h.slice(20)].join("-");
+  }
+
+  /* The tag says which version of the record we read, and writing back
+     conditional on it means a stale read can never overwrite a fresher
+     write — the service answers 412 and we stop rather than clobber.
+     Measured against the real thing: right tag 200, stale tag 412, and the
+     tag changes on every write. */
+  let syncTag = "";
+  async function syncFetch(id) {
+    const r = await fetch(SYNC_AT.replace("{id}", id));
+    if (r.status === 404 || r.status === 410) {
+      const e = new Error("lost"); e.lost = true; throw e;
+    }
+    if (r.status === 429)
+      throw new Error("The sync service is asking us to slow down. Try again in a minute.");
+    if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
+    syncTag = r.headers.get("ETag") || "";
+    return r.json();
+  }
+  async function syncPut(id, payload) {
+    const headers = { "Content-Type": "application/json" };
+    if (syncTag) headers["If-Match"] = syncTag;
+    const r = await fetch(SYNC_AT.replace("{id}", id), {
+      method: "PUT", headers, body: JSON.stringify(payload) });
+    if (r.status === 412 || r.status === 429)
+      throw new Error("Another device synced while this one was working. "
+                      + "Press sync again.");
+    if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
+  }
+  async function syncCreate(books) {
+    const r = await fetch(SYNC_NEW, { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ v: 1, books: books || {} }) });
+    const loc = r.headers.get("Location") || "";
+    const id = loc.replace(/\/$/, "").split("/").pop();
+    if (!id) throw new Error("The sync service did not give us a place to put it.");
+    return id;
+  }
+
+  /* A book's own id is its slot whenever both devices hold the same file,
+     since the id is a hash of the audio. A different rip is a different
+     hash, which is what pairing is for. */
+  const slotsOf = books => {
+    const out = {};
+    for (const b of books) out[b.syncSlot || b.id] = b;
+    return out;
+  };
+
+  async function syncRoute(rest, post, body) {
+    const s = syncState();
+    const books = await allBooks();
+    const slots = slotsOf(books);
+
+    if (!rest) {
+      const dirty = books.some(b => (b.positionAt || 0) > (s.last || 0));
+      return { code: s.id ? syncCode(s.id) : null, device: s.device || "",
+               last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
+               dirty: !!s.id && dirty, books: books.length };
+    }
+    if (rest === "name" && post) {
+      s.device = String(body.name || "").trim().slice(0, 40);
+      saveSync(s);
+      return { device: deviceName() };
+    }
+    if (rest === "forget" && post) {
+      localStorage.removeItem(SYNC_KEY);
+      return { ok: true };
+    }
+    if (rest === "new" && post) {
+      try {
+        saveSync({ id: await syncCreate(), last: 0, device: s.device || "" });
+        return { code: syncCode(syncState().id) };
+      } catch (e) { return { error: e.message }; }
+    }
+    if (rest === "join" && post) {
+      try {
+        const id = syncBlobId(body.code);
+        await syncFetch(id);
+        saveSync({ id, last: 0, device: s.device || "" });
+        return { code: syncCode(id) };
+      } catch (e) {
+        return { error: e.lost ? "There is nothing at that code any more." : e.message };
+      }
+    }
+    if (rest === "rebuild" && post) {
+      try {
+        s.id = await syncCreate(s.mirror || {});
+        s.lost = false;
+        saveSync(s);
+        return { code: syncCode(s.id), carried: Object.keys(s.mirror || {}).length };
+      } catch (e) { return { error: e.message }; }
+    }
+    if (rest === "pair" && post) {
+      const b = await getBook(String(body.id || ""));
+      if (!b) return { error: "No such book." };
+      if (body.slot) b.syncSlot = String(body.slot); else delete b.syncSlot;
+      await putBook(b);
+      return { ok: true };
+    }
+    if (rest === "now" && post) {
+      if (!s.id) return { error: "No sync code yet." };
+      const now = Math.floor(Date.now() / 1000);
+      let remote;
+      try { remote = (await syncFetch(s.id)).books || {}; }
+      catch (e) {
+        if (!e.lost) return { error: e.message };
+        s.lost = true; saveSync(s);
+        return { lost: true, carried: Object.keys(s.mirror || {}).length,
+                 error: "The sync record is gone from the service." };
+      }
+
+      const who = deviceName(), pulled = [];
+      for (const slot of Object.keys(slots)) {
+        const b = slots[slot];
+        const mine = { name: b.title || "", pos: +(b.position || 0),
+                       dur: +(b.duration || 0), at: b.positionAt || 0, by: who };
+        const theirs = remote[slot];
+        /* Newest wins, per book. Not furthest: going back to re-hear a
+           chapter is deliberate and must not be undone by a stale reading
+           from the other device. */
+        if (theirs && (theirs.at || 0) > mine.at) {
+          b.position = +(theirs.pos || 0);
+          b.positionAt = theirs.at || 0;
+          await putBook(b);
+          pulled.push(b.title || slot);
+        } else {
+          if (!mine.at) { mine.at = now; b.positionAt = now; await putBook(b); }
+          if (!theirs || mine.at > (theirs.at || 0)) remote[slot] = mine;
+        }
+      }
+      // clear what a pairing left behind under the book's own id
+      for (const b of books) if (b.syncSlot && b.syncSlot !== b.id) delete remote[b.id];
+
+      try { await syncPut(s.id, { v: 1, books: remote }); }
+      catch (e) { return { error: e.message }; }
+
+      const entries = Object.keys(remote).map(k => remote[k]);
+      // High-water mark, not our own clock: a reading pulled from a device
+      // running fast would otherwise leave the dot permanently dirty.
+      s.last = Math.max.apply(null, [now].concat(entries.map(e => e.at || 0)));
+      s.mirror = remote;
+      s.lost = false;
+      s.lastBy = (entries.slice().sort((a, c) => (c.at || 0) - (a.at || 0))[0] || {}).by || who;
+      saveSync(s);
+
+      const taken = {};
+      for (const k of Object.keys(slots)) taken[k] = true;
+      const free = books.filter(b => !b.syncSlot);
+      const unmatched = Object.keys(remote).filter(k => !taken[k]).map(slot => {
+        const e = remote[slot];
+        return { slot, name: e.name || "", pos: e.pos || 0, dur: e.dur || 0,
+                 suggest: free
+                   .filter(b => e.dur && Math.abs((b.duration || 0) - e.dur) <= MATCH_ON_DURATION)
+                   .slice(0, 4)
+                   .map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
+      });
+      return { ok: true, last: s.last, by: s.lastBy, pulled, pushed: [], unmatched };
+    }
+    return { error: "The web reader has no /api/sync/" + rest + "." };
   }
 
   window.SpineLocal = {

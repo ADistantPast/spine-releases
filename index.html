@@ -31,6 +31,16 @@
         <button class="btn ghost" id="btnChapters">Chapters</button>
         <button class="btn ghost" id="btnNotes">Notes</button>
       </div>
+      <!-- Where you are with your books, shared between your own devices.
+           Absolutely positioned so it uses the empty top-right of the bar
+           without shoving the title or the button row around — the same
+           reasoning as the series editor. -->
+      <div class="sync" id="syncWrap">
+        <button class="sync-btn" id="syncDot" title="Syncing between your devices">
+          <span class="sync-led" id="syncLed"></span><span id="syncLabel">Sync</span>
+        </button>
+        <div class="sync-pop" id="syncPop" hidden></div>
+      </div>
       <!-- A phone has no window to pop out of, so this reads as a plain
            switch back to the full page rather than a "close the pop-out". -->
       <button class="btn ghost pop-exit" id="btnPopExit" title="Back to the full page">
