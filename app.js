@@ -3367,6 +3367,39 @@ async function refreshSync() {
     : syncInfo.lost ? "Code lost" : syncInfo.dirty ? "Unsynced" : "Synced";
 }
 
+/* The two lines that change while the panel is open. Kept apart from the
+   markup because they are written again on their own — re-rendering the
+   whole panel after every sync flickers, and wipes whatever is half-typed
+   in the name field. */
+function syncWhenLine(s) {
+  if (s.busy) return "Syncing…";
+  if (s.lost) return "The record is gone from the service.";
+  return `Last synced ${esc(syncWhen(s.last))}${s.lastBy ? " by " + esc(s.lastBy) : ""}.`;
+}
+
+function syncCountLine(s) {
+  if (s.shared === undefined) return "";
+  return s.shared
+    ? `Sharing ${s.shared} book${s.shared === 1 ? "" : "s"} with your other devices.`
+    : "Nothing shared yet — press sync, or check the other device is on this same code.";
+}
+
+/* Which panel this is, rather than what it says: a code appearing or the
+   record going missing changes the shape and needs a real redraw. Anything
+   else is two lines of text. */
+const syncShape = s => `${!!s.code}|${!!s.lost}`;
+let syncDrawn = "";
+
+function paintSync() {
+  const pop = $("syncPop");
+  if (!pop || pop.hidden) return;
+  if (syncShape(syncInfo) !== syncDrawn) return openSyncPop();
+  const w = pop.querySelector(".sync-when");
+  if (w) w.innerHTML = syncWhenLine(syncInfo);
+  const c = pop.querySelector(".sync-count");
+  if (c) c.textContent = syncCountLine(syncInfo);
+}
+
 function syncPopHtml() {
   const s = syncInfo;
   if (!s.code) return `
@@ -3386,14 +3419,8 @@ function syncPopHtml() {
     <p class="hint">This device is called</p>
     <input id="syncDevice" value="${esc(s.device || "")}" placeholder="Desktop"
            maxlength="40" spellcheck="false">
-    <p class="sync-when">
-      ${s.busy ? "Syncing…"
-               : s.lost ? "The record is gone from the service."
-               : `Last synced ${esc(syncWhen(s.last))}${s.lastBy ? " by " + esc(s.lastBy) : ""}.`}
-    </p>
-    ${s.lost ? "" : `<p class="sync-count">${s.shared === undefined ? ""
-      : s.shared ? `Sharing ${s.shared} book${s.shared === 1 ? "" : "s"} with your other devices.`
-                 : "Nothing shared yet — press sync, or check the other device is on this same code."}</p>`}
+    <p class="sync-when">${syncWhenLine(s)}</p>
+    ${s.lost ? "" : `<p class="sync-count">${syncCountLine(s)}</p>`}
     ${s.lost
       ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>
          <p class="hint">Your positions are kept here and carry over. The other
@@ -3401,6 +3428,12 @@ function syncPopHtml() {
       : `<div class="sync-row">
            <button class="btn" id="syncGo">Sync now</button>
            <button class="btn ghost" id="syncForget">Forget</button>
+           <button class="btn ghost" id="syncJoinBtn">Another code</button>
+         </div>
+         <div id="syncJoinBox" hidden>
+           <input id="syncJoinCode" placeholder="0000-0000-0000-0000-0000-0000-00"
+                  spellcheck="false" autocomplete="off">
+           <div class="sync-row"><button class="btn" id="syncJoinGo">Join</button></div>
          </div>`}
     <p class="hint">Your code</p>
     <p class="sync-code">${esc(s.code)}</p>
@@ -3411,6 +3444,7 @@ function openSyncPop() {
   const pop = $("syncPop");
   pop.innerHTML = syncPopHtml();
   pop.hidden = false;
+  syncDrawn = syncShape(syncInfo);
 
   $("syncNew")?.addEventListener("click", async () => {
     const r = await syncApi("/api/sync/new", {});
@@ -3423,8 +3457,20 @@ function openSyncPop() {
     if (r.error) return toast(r.error);
     await refreshSync(); openSyncPop();
   });
-  $("syncDevice")?.addEventListener("change", e =>
-    syncApi("/api/sync/name", { name: e.target.value }));
+  $("syncDevice")?.addEventListener("change", e => {
+    const v = e.target.value.trim();
+    // A code pasted into the name box. It is the first field in the panel
+    // and looks like where a code goes, so this happens — and saving it
+    // silently leaves the device called "01KZ-NC90-…" and the code
+    // untouched, with nothing on screen explaining either.
+    if (v.replace(/[^0-9A-Za-z]/g, "").length === 26 && /^[0-9A-Za-z-]+$/.test(v)) {
+      e.target.value = syncInfo.device || "";
+      $("syncJoinBox").hidden = false;
+      $("syncJoinCode").value = v;
+      return toast("That looks like a sync code — press Join to use it.");
+    }
+    syncApi("/api/sync/name", { name: v });
+  });
   $("syncForget")?.addEventListener("click", async () => {
     await syncApi("/api/sync/forget", {}); await refreshSync(); closeSyncPop();
   });
@@ -3449,12 +3495,12 @@ async function runSync() {
   $("syncWrap").className = "sync busy";
   $("syncLabel").textContent = "Syncing";
   syncInfo.busy = true;
-  if (!$("syncPop").hidden) openSyncPop();
+  paintSync();
   let r;
   try { r = await syncApi("/api/sync/now", {}); }
   finally { syncBusy = false; syncInfo.busy = false; }
   await refreshSync();
-  if (!$("syncPop").hidden) openSyncPop();
+  paintSync();
   if (!r || r.error) return toast((r && r.error) || "Could not sync.");
   if (r.forgotten) return;   // Forget was pressed while this was in flight
   if (r.lost) return toast("The sync record has gone.");
@@ -3474,7 +3520,8 @@ function renderPairs(list) {
     ${list.map((u, i) => `
       <p class="sync-when">${esc(u.name || "Untitled")}</p>
       <select data-slot="${esc(u.slot)}">
-        <option value="">Not one of mine</option>
+        <option value="">Not one of mine — ask again</option>
+        <option value="__drop">Not one of mine — remove it</option>
         ${(u.suggest || []).map(s =>
           `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join("")}
         ${libraryItems.filter(b => !(u.suggest || []).some(s => s.id === b.id))
@@ -3483,6 +3530,15 @@ function renderPairs(list) {
   </div>`;
   box.querySelectorAll("select").forEach(sel => sel.onchange = async () => {
     if (!sel.value) return;
+    const row = sel.previousElementSibling;   // the name above it
+    if (sel.value === "__drop") {
+      const r = await syncApi("/api/sync/drop", { slot: sel.dataset.slot });
+      if (r && r.error) return toast(r.error);
+      if (row) row.remove();
+      sel.remove();
+      if (!box.querySelector("select")) box.innerHTML = "";
+      return toast("Removed from the shared record.");
+    }
     await syncApi("/api/sync/pair", { id: sel.value, slot: sel.dataset.slot });
     toast("Paired. It will follow from now on.");
   });
@@ -3504,7 +3560,7 @@ $("syncDot").onclick = e => {
   openSyncPop();                     // instant, from what the dot already knows
   refreshSync().then(() => {
     if ($("syncPop").hidden) return;
-    openSyncPop();                   // redrawn with the fresh reading
+    paintSync();                     // the fresh reading, without a rebuild
     if (syncInfo.code && !syncInfo.lost) runSync();
   });
 };
@@ -3653,7 +3709,10 @@ async function localSync(path, body) {
     const dirty = shelf.some(b => (b.positionAt || 0) > (s.last || 0));
     return { code: s.id ? lsCode(s.id) : null, device: s.device || "",
              last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
-             dirty: !!s.id && dirty, books: shelf.length };
+             dirty: !!s.id && dirty, books: shelf.length,
+             // from the mirror, so the phone can say it too — zero here on a
+             // device that has pushed books is two devices on two codes
+             shared: Object.keys(s.mirror || {}).length };
   }
   if (rest === "name") { s.device = String(body.name || "").trim().slice(0, 40); lsSave(s);
                          return { device: lsDevice() }; }
@@ -3672,6 +3731,19 @@ async function localSync(path, body) {
     try { s.id = await lsNew(s.mirror || {}); s.lost = false; lsSave(s);
           return { code: lsCode(s.id), carried: Object.keys(s.mirror || {}).length }; }
     catch (e) { return { error: e.message }; }
+  }
+  if (rest === "drop") {
+    if (!s.id || !body.slot) return { error: "Nothing to remove." };
+    try {
+      const books = (await lsGet(s.id)).books || {};
+      if (!(body.slot in books)) return { ok: true, gone: true };
+      delete books[body.slot];
+      await lsPut(s.id, { v: 1, books });
+      s.mirror = books; lsSave(s);
+      return { ok: true };
+    } catch (e) {
+      return { error: e.lost ? "The sync record is gone from the service." : e.message };
+    }
   }
   if (rest === "pair") {
     await api("/api/syncslot/" + body.id, { slot: body.slot || "" });
