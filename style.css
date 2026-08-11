@@ -1098,8 +1098,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
      — the bar is a column — and in flow the pill would take a whole line of
      its own above the search box, which is what it did when this rule was
      missing. */
-  .sync{position:absolute;top:calc(18px + var(--safe-t));right:calc(22px + var(--safe-r));margin-bottom:0}
-  .bar-title{padding-right:74px}
+  /* .bar .sync, not .sync: the wide-layout rule further down the file
+     is a plain .sync, and a later rule of equal specificity wins. The
+     pill therefore stayed in flow at every width and took a whole line
+     of its own in this column — including on a Fold, where a coarse
+     pointer puts a wide screen in this layout. The desktop copy never
+     showed it because its rule is scoped .app:not(.compact) and so
+     outranks its own. */
+  .bar .sync{position:absolute;top:calc(18px + var(--safe-t));right:calc(22px + var(--safe-r));margin-bottom:0;order:0}
+  .bar .bar-title{padding-right:74px}
   /* Thumb-sized, matching .lib-actions .row-go below. The hint takes its own
      line: measured at 375px it was ellipsised down to "Hold a bo…" sharing
      one with the select. */

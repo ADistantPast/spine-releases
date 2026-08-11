@@ -3456,6 +3456,7 @@ async function runSync() {
   await refreshSync();
   if (!$("syncPop").hidden) openSyncPop();
   if (!r || r.error) return toast((r && r.error) || "Could not sync.");
+  if (r.forgotten) return;   // Forget was pressed while this was in flight
   if (r.lost) return toast("The sync record has gone.");
   const n = (r.pulled || []).length;
   toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
@@ -3710,6 +3711,12 @@ async function localSync(path, body) {
 
     try { await lsPut(s.id, { v: 1, books: remote }); }
     catch (e) { return { error: e.message }; }
+
+    // Forgotten, or paired to another code, while this ran — the dot starts
+    // a sync when it is pressed, so "press the dot, press Forget" is the
+    // ordinary way to use the panel. Saving our copy of the state here put
+    // the forgotten code straight back. Same guard as app.py's.
+    if ((lsSync().id || "") !== s.id) return { ok: true, forgotten: true, pulled, pushed: [] };
 
     const all = Object.keys(remote).map(k => remote[k]);
     s.last = Math.max.apply(null, [now].concat(all.map(e => e.at || 0)));
