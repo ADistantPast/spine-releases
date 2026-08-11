@@ -3714,8 +3714,30 @@ async function localSync(path, body) {
              // device that has pushed books is two devices on two codes
              shared: Object.keys(s.mirror || {}).length };
   }
-  if (rest === "name") { s.device = String(body.name || "").trim().slice(0, 40); lsSave(s);
-                         return { device: lsDevice() }; }
+  if (rest === "name") {
+    const was = (s.device || "").trim();
+    s.device = String(body.name || "").trim().slice(0, 40);
+    lsSave(s);
+    const now = lsDevice();
+    // Entries keep the name that wrote them, which is right for another
+    // device and wrong for this one under an old name — the panel then goes
+    // on crediting a name you have just renamed away from. Cosmetic, so a
+    // failure here never fails the rename itself.
+    if (s.id && was && was !== now) {
+      try {
+        const books = (await lsGet(s.id)).books || {};
+        const hits = Object.keys(books).filter(k => (books[k].by || "") === was);
+        if (hits.length) {
+          hits.forEach(k => { books[k].by = now; });
+          await lsPut(s.id, { v: 1, books });
+          s.mirror = books;
+          if ((s.lastBy || "") === was) s.lastBy = now;
+          lsSave(s);
+        }
+      } catch (e) { /* renamed here, and the next sync relabels the rest */ }
+    }
+    return { device: now };
+  }
   if (rest === "forget") { localStorage.removeItem(SYNC_LS); return { ok: true }; }
   if (rest === "new") {
     try { lsSave({ id: await lsNew(), last: 0, device: s.device || "" });

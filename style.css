@@ -1388,18 +1388,20 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    the rest of the panel was spaced at 6-10px. Reported as too much padding
    above "This device is called". One rhythm now, set here rather than by
    whatever each element's default happens to be. */
-/* One left edge for everything you read.
+/* One left edge, and it is the edge of the boxes.
  *
- * There are two families here: plain text, which starts at the panel's own
- * padding, and a field, which carries 8px of its own on top of that. Lining
- * the boxes up therefore leaves the text ragged, which is the half a reader
- * actually sees. So the boxes stay flush with the panel and the text is
- * inset to meet them — 9px, the field's padding plus its border.
+ * Two families live here: plain text, which starts at the panel's own
+ * padding, and a field or a button, which carries 8px of its own on top.
+ * They cannot both sit on one line — a field's value is always inside its
+ * own border. Asked which line it should be, the owner picked the boxes: so
+ * the label, both status lines and the code all start where the field's
+ * border and the buttons' surfaces start, and only the value you type is
+ * inset, the way a form field is expected to look.
  *
- * And one rhythm, in four groups: the field and its label, the two status
- * lines, the buttons, the code. 6px inside a group, 14px between them. */
+ * The rhythm is four groups: the field and its label, the two status lines,
+ * the buttons, the code. 6px inside a group, 14px between them. */
 .sync-pop p{margin:0}
-.sync-pop .hint{padding:0 0 6px 9px}
+.sync-pop .hint{padding:0 0 6px}
 .sync-pop input{
   width:100%;background:var(--ink);border:1px solid var(--hair);border-radius:5px;
   color:var(--bone);padding:6px 8px;font-family:var(--data);font-size:11.5px;
@@ -1409,16 +1411,14 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .sync-pop .sync-row + .hint{padding-top:2px}
 .sync-pop #syncJoinBox{margin-top:-6px}
 .sync-pop .btn{padding:6px 10px;font-size:11px;flex:0 0 auto}
-.sync-when{color:var(--bone);font-size:12px;margin:14px 0 0;padding-left:9px}
+.sync-when{color:var(--bone);font-size:12px;margin:14px 0 0}
 /* How many books the shared record holds. Zero here on a device that has
    pushed some is the visible form of "these two devices are on different
    codes", which otherwise looks exactly like syncing quietly doing nothing. */
-.sync-count{color:var(--dust);font-size:11.5px;line-height:1.5;
-  margin:4px 0 0;padding-left:9px}
+.sync-count{color:var(--dust);font-size:11.5px;line-height:1.5;margin:4px 0 0}
 .sync-code{
   font-family:var(--data);font-size:12px;color:var(--verdigris);
-  letter-spacing:.05em;word-break:break-all;user-select:all;
-  margin:0;padding-left:9px;
+  letter-spacing:.05em;word-break:break-all;user-select:all;margin:0;
 }
 .sync-pair{border-top:1px solid var(--hair);margin-top:14px;padding-top:12px}
 .sync-pair .sync-when{margin-top:10px}
