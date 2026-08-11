@@ -201,6 +201,7 @@ async function loadBook(id, startAt = "last") {
   browseT = t;
   lastMarkPct = -1;   // a new book means a new duration behind the same %
   updateTimeline(t);
+  noteTheirPlace(syncInfo.others);
   /* Light the word the book is sitting on, straight away.
 
      Nothing did. The highlight is only ever set by the playback loop or by a
@@ -529,12 +530,45 @@ function scrollToTime(t, behavior) {
   const el = pw.el[Math.max(0, i)];
   if (!el) return;
   const reader = $("reader");
+  const top = reader.scrollTop + el.getBoundingClientRect().top
+              - reader.getBoundingClientRect().top - reader.clientHeight * 0.32;
+  const far = Math.abs(top - reader.scrollTop) > reader.clientHeight * 1.2;
   autoScrollUntil = performance.now() + 900;
-  reader.scrollTo({
-    top: reader.scrollTop + el.getBoundingClientRect().top
-         - reader.getBoundingClientRect().top - reader.clientHeight * 0.32,
-    behavior: behavior || "instant",
-  });
+  reader.scrollTo({ top, behavior: behavior || "instant" });
+
+  /* And again on the next frame, because the first landing is an estimate.
+     .seg carries content-visibility:auto, so the paragraphs between here
+     and there may never have been laid out — the browser measures from
+     guessed heights, lands nearby, lays out what it just revealed, and the
+     target moves. Measured on the real book, paused, jumping seven hours
+     in: the word ended up 4,700px below the viewport, and repeating the
+     same call put it 440px from the top and kept it there. Playing hid it,
+     because the loop re-centres every frame.
+
+     Only if nobody else has scrolled since, so it can never yank a reader
+     who took hold of the page in between. */
+  if (far) {
+    /* Twice more, at a frame and at a quarter of a second.
+       One frame is not enough: the layout keeps settling as paragraphs come
+       into view, and Chromium's own scroll anchoring moves scrollTop while
+       it does — which also rules out "has the position changed?" as a test
+       for whether the reader took hold of the page. What answers that
+       honestly is lastUserInput, the same signal that decides whether a
+       scroll event was a person (see the follow logic below). */
+    const startedAt = performance.now();
+    const settle = () => {
+      if (lastUserInput > startedAt) return;          // they took over
+      const e2 = pw.el[Math.max(0, wordAt(t))];
+      if (!e2) return;
+      const again = reader.scrollTop + e2.getBoundingClientRect().top
+                    - reader.getBoundingClientRect().top - reader.clientHeight * 0.32;
+      if (Math.abs(again - reader.scrollTop) < 4) return;
+      autoScrollUntil = performance.now() + 900;
+      reader.scrollTo({ top: again, behavior: "instant" });
+    };
+    requestAnimationFrame(settle);
+    setTimeout(settle, 250);
+  }
 }
 
 /* ------------------------------------------------------------ the loop */
@@ -2126,6 +2160,7 @@ async function saveNotes(notes) {
   book.notes = r.notes;
   renderBook();
   drawTicks();
+  markTheirs();
 }
 
 function noteFromCurrentSelection() {
@@ -3371,6 +3406,41 @@ async function refreshSync() {
    markup because they are written again on their own — re-rendering the
    whole panel after every sync flickers, and wipes whatever is half-typed
    in the name field. */
+/* ------------------------------------------- where the other device is
+
+   A sync tells us the reading each other device had when the record was
+   read. Marking it in the text answers a question the panel cannot: not
+   "when did it last sync" but "where had it got to" — the word itself,
+   green, in the page you are reading.
+
+   theirsAt is in seconds, and survives a re-render because renderBook()
+   throws every span away: the mark is re-applied rather than remembered. */
+let theirsAt = null, theirsBy = "";
+
+function theirSlot() {
+  return book ? (book.syncSlot || book.id) : null;
+}
+
+/* Take the reading for the open book out of whatever a sync (or the dot's
+   own state) reported, and mark it. */
+function noteTheirPlace(others) {
+  const slot = theirSlot();
+  const e = slot && others ? others[slot] : null;
+  theirsAt = e ? +(e.pos || 0) : null;
+  theirsBy = e ? (e.by || "") : "";
+  markTheirs();
+}
+
+function markTheirs() {
+  document.querySelectorAll(".w.theirs").forEach(w => w.classList.remove("theirs"));
+  if (theirsAt == null || !book || compact) return;
+  const i = wordAt(theirsAt);
+  const el = i >= 0 ? pw.el[i] : null;
+  if (!el) return;
+  el.classList.add("theirs");
+  el.title = theirsBy ? `${theirsBy} is here` : "your other device is here";
+}
+
 function syncWhenLine(s) {
   if (s.busy) return "Syncing…";
   if (s.lost) return "The record is gone from the service.";
@@ -3504,6 +3574,17 @@ async function runSync() {
   if (!r || r.error) return toast((r && r.error) || "Could not sync.");
   if (r.forgotten) return;   // Forget was pressed while this was in flight
   if (r.lost) return toast("The sync record has gone.");
+  noteTheirPlace(r.others);
+  /* A newer reading for the book on screen. Going to it is the whole point
+     of having synced — leaving the page where it was means the position
+     only takes effect the next time the book is opened, which is how this
+     looked like it had not worked at all. Same as clicking that word. */
+  if (book && (r.pulledIds || []).indexOf(book.id) >= 0) {
+    if (theirsAt != null) playFrom(theirsAt);
+    closeSyncPop();
+    toast(`Caught up to ${theirsBy || "your other device"}.`);
+    return renderPairs(r.unmatched || []);
+  }
   const n = (r.pulled || []).length;
   toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
   renderPairs(r.unmatched || []);
@@ -3685,8 +3766,12 @@ async function lsPut(id, payload) {
   if (lsTag) headers["If-Match"] = lsTag;
   const r = await fetch(SYNC_AT.replace("{id}", id), {
     method: "PUT", headers, body: JSON.stringify(payload) });
-  if (r.status === 412 || r.status === 429)
+  // 412 and 429 are different answers: a rate limit is not another device,
+  // and saying it was sends someone looking for one that does not exist.
+  if (r.status === 412)
     throw new Error("Another device synced while this one was working. Press sync again.");
+  if (r.status === 429)
+    throw new Error("The sync service is asking us to slow down. Try again in a minute.");
   if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
 }
 async function lsNew(books) {

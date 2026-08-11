@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.38";
+  const WEB_VERSION = "1.0.39";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -200,16 +200,36 @@
    * the two must agree byte for byte.
    */
   const SHARE_FETCH = "https://litter.catbox.moe/{code}.bin";
+  /* A code beginning "r" was sent from the owner's own storage. Only their
+     machine can put a book there — that needs a key — but the address is
+     public, so taking one out needs nothing at all, which is what lets this
+     page receive it. Cloudflare's browser check sits in front of it and
+     refuses non-browsers; a browser is exactly what this is. */
+  const R2_MARK = "r";
+  const R2_FETCH =
+    "https://pub-787818878970401b98b311335532b0cf.r2.dev/sends/{code}.bin";
+  const fetchUrlFor = loc =>
+    (loc.startsWith(R2_MARK) && loc.length === 11
+      ? R2_FETCH.replace("{code}", loc.slice(1))
+      : SHARE_FETCH.replace("{code}", loc));
   const SHARE_MAGIC = "SPINEBK1";
   const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
   const SECRET_BYTES = 10;
 
   function parseCode(code) {
-    const clean = (code || "").replace(/[^0-9A-Za-z]/g, "");
-    if (clean.length !== 6 + 16) throw new Error("That code is not the right length.");
-    const location = clean.slice(0, 6).toLowerCase();
+    const all = (code || "").replace(/[^0-9A-Za-z]/g, "");
+    // A marked code carries where it came from: one letter, then ten
+    // characters of location instead of six. The mark stays on the location
+    // so fetchUrlFor() knows which address to ask.
+    const marked = all[0] && all[0].toLowerCase() === R2_MARK &&
+                   all.length === 1 + 10 + 16;
+    const clean = marked ? all.slice(1) : all;
+    const locLen = marked ? 10 : 6;
+    if (clean.length !== locLen + 16)
+      throw new Error("That code is not the right length.");
+    const location = (marked ? R2_MARK : "") + clean.slice(0, locLen).toLowerCase();
     let n = 0n;
-    for (const ch of clean.slice(6).toUpperCase()) {
+    for (const ch of clean.slice(locLen).toUpperCase()) {
       // the Crockford slips: a typed I or L is 1, a typed O is 0
       const v = B32.indexOf({ I: "1", L: "1", O: "0", U: "0" }[ch] || ch);
       if (v < 0) throw new Error(`"${ch}" is not part of a Spine code.`);
@@ -232,7 +252,7 @@
   async function receiveByCode(code, onProgress) {
     const { location, secret } = parseCode(code);
     const key = await shareKey(secret);
-    const res = await fetch(SHARE_FETCH.replace("{code}", location));
+    const res = await fetch(fetchUrlFor(location));
     if (res.status === 404)
       throw new Error("That code has expired, or it was typed wrong. Codes only last a few hours.");
     if (!res.ok) throw new Error(`The transfer service answered ${res.status}.`);
@@ -765,9 +785,16 @@
     if (syncTag) headers["If-Match"] = syncTag;
     const r = await fetch(SYNC_AT.replace("{id}", id), {
       method: "PUT", headers, body: JSON.stringify(payload) });
-    if (r.status === 412 || r.status === 429)
+    // 412 and 429 are different answers and were sharing one sentence: a
+    // rate limit read as "another device synced", which sends someone
+    // looking for a device that does not exist. Found while testing a drop
+    // that failed for the second reason and reported the first.
+    if (r.status === 412)
       throw new Error("Another device synced while this one was working. "
                       + "Press sync again.");
+    if (r.status === 429)
+      throw new Error("The sync service is asking us to slow down. "
+                      + "Try again in a minute.");
     if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
   }
   async function syncCreate(books) {
@@ -798,12 +825,52 @@
       const dirty = books.some(b => (b.positionAt || 0) > (s.last || 0));
       return { code: s.id ? syncCode(s.id) : null, device: s.device || "",
                last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
-               dirty: !!s.id && dirty, books: books.length };
+               dirty: !!s.id && dirty, books: books.length,
+               shared: Object.keys(s.mirror || {}).length };
     }
     if (rest === "name" && post) {
+      const was = (s.device || "").trim();
       s.device = String(body.name || "").trim().slice(0, 40);
       saveSync(s);
-      return { device: deviceName() };
+      const now = deviceName();
+      // An entry keeps the name that wrote it, which is right for another
+      // device and wrong for this one under an old name. Cosmetic, so it
+      // never fails the rename: the next sync relabels whatever it touches.
+      if (s.id && was && was !== now) {
+        try {
+          const rec = await syncFetch(s.id);
+          const held = rec.books || {};
+          const mine = Object.keys(held).filter(k => (held[k].by || "") === was);
+          if (mine.length) {
+            mine.forEach(k => { held[k].by = now; });
+            await syncPut(s.id, { v: 1, books: held });
+            s.mirror = held;
+            if ((s.lastBy || "") === was) s.lastBy = now;
+            saveSync(s);
+          }
+        } catch (e) { /* renamed here regardless */ }
+      }
+      return { device: now };
+    }
+    /* An entry for a book this device does not have, and never will.
+       "Not one of mine" stored nothing, so the same entry asked to be
+       paired at every sync for ever. */
+    if (rest === "drop" && post) {
+      const slot = String(body.slot || "").trim();
+      if (!s.id || !slot) return { error: "Nothing to remove." };
+      try {
+        const rec = await syncFetch(s.id);
+        const held = rec.books || {};
+        if (!(slot in held)) return { ok: true, gone: true };
+        delete held[slot];
+        await syncPut(s.id, { v: 1, books: held });
+        s.mirror = held;
+        saveSync(s);
+        return { ok: true };
+      } catch (e) {
+        return { error: e.lost ? "The sync record is gone from the service."
+                                : e.message };
+      }
     }
     if (rest === "forget" && post) {
       localStorage.removeItem(SYNC_KEY);
