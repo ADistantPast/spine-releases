@@ -3600,7 +3600,15 @@ document.addEventListener("keydown", e => {
    *
    * Every settled state ends it. Only "idle" — the check has not finished —
    * is worth asking again about. */
-  for (let i = 0; i < 12 && !document.hidden; i++) {
+  /* Not `&& !document.hidden`. That was here to avoid polling a window nobody
+     is looking at, and it is re-tested every pass — so switching to another
+     window while Spine starts, which is the ordinary thing to do while a book
+     loads, ended the loop after one attempt and no update was ever offered for
+     that whole run. Minimised at launch, it never ran at all. Reported as
+     "the auto updater hasn't been working for a while: it won't ask me."
+     Twelve requests to a loopback endpoint cost nothing; a missed release
+     costs a release. */
+  for (let i = 0; i < 12; i++) {
     await new Promise(r => setTimeout(r, i ? 2000 : 2500));
     let u;
     try { u = await api("/api/update"); } catch (e) { return; }
@@ -3613,6 +3621,26 @@ document.addEventListener("keydown", e => {
     if (u.state && u.state !== "idle") return;   // current, or offline
   }
 })();
+
+/* And ask again when you come back to it.
+
+   The backend checks once at startup and the poll above only covers the first
+   half-minute, so an app left open for a day never learns about a release
+   published in the meantime — the other half of "it won't find the latest
+   update". Coming back to the window is the cheapest honest moment to re-ask,
+   and it is rate-limited so that flicking between windows does not hammer
+   GitHub. */
+const RECHECK_AFTER = 6 * 60 * 60 * 1000;
+let lastChecked = Date.now();
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden || Date.now() - lastChecked < RECHECK_AFTER) return;
+  lastChecked = Date.now();
+  let u = null;
+  try { u = await api("/api/update/check", {}); } catch (e) { return; }
+  if (!u || u.state !== "available") return;
+  if (sessionStorage.getItem("spine.skipUpdate") === u.version) return;
+  offerUpdate(u);
+});
 
 /* Put the banner up for a release we know about. Split out so the automatic
    check and the "check now" tap on the version line show the same thing — a
