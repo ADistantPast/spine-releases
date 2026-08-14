@@ -22,11 +22,21 @@
   </script>
 <link rel="stylesheet" href="style.css">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#12161C">
+<!-- The dark theme's --field-2. applyTheme() rewrites this from the live
+     token on load, so this value only covers the first paint — but it was
+     the pre-1.1.0 blue-grey, which is a visible flash of the old palette
+     in the browser's own chrome. -->
+<meta name="theme-color" content="#141312">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Spine">
 <link rel="apple-touch-icon" href="icon-180.png">
+<!-- The one place the light icon earns its keep: a browser picks a
+     favicon per theme, so a dark tab strip gets the dark mark and a
+     pale one gets the pale mark. A launcher icon deliberately does not
+     do this — it would be the only icon on the device that did. -->
+<link rel="icon" href="icon-192.png" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="icon-192-light.png" media="(prefers-color-scheme: light)">
 </head>
 <body>
 

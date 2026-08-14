@@ -91,6 +91,10 @@
   --scrim-strong:rgba(10,9,8,.72);
   --veil:rgba(12,11,10,.86);
   --shadow-1:rgba(0,0,0,.45);
+  /* Stacked lifts, not one big blur — see the banding note in CLAUDE.md. A
+     panel gets --lift-lg, a popover --lift-md. */
+  --lift-lg:0 1px 2px rgba(0,0,0,.34), 0 4px 9px rgba(0,0,0,.28), 0 13px 26px rgba(0,0,0,.22);
+  --lift-md:0 1px 2px rgba(0,0,0,.30), 0 3px 7px rgba(0,0,0,.24), 0 9px 18px rgba(0,0,0,.18);
   --shadow-2:rgba(0,0,0,.5);
   --shadow-3:rgba(0,0,0,.4);
 
@@ -194,6 +198,8 @@
   --scrim-strong:rgba(60,56,48,.44);
   --veil:rgba(250,249,245,.9);
   --shadow-1:rgba(60,56,48,.16);
+  --lift-lg:0 1px 2px rgba(60,56,48,.10), 0 4px 9px rgba(60,56,48,.09), 0 13px 26px rgba(60,56,48,.08);
+  --lift-md:0 1px 2px rgba(60,56,48,.09), 0 3px 7px rgba(60,56,48,.08), 0 9px 18px rgba(60,56,48,.07);
   --shadow-2:rgba(60,56,48,.2);
   --shadow-3:rgba(60,56,48,.13);
 
@@ -825,7 +831,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .lib-head .trash{
   flex:0 0 auto;margin:0;
   display:inline-flex;align-items:center;justify-content:center;
-  border:1px solid var(--hair);border-radius:6px;
+  border:1px solid var(--hair);border-radius:var(--r-md);
   /* same box as .lib-actions .row-go below, so the two line up as a set */
   padding:0 9px;min-height:23px;
   color:var(--muted);
@@ -871,20 +877,34 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
    is scoped to .lib — drawerBody is shared with Chapters and Notes, and
    turning it into a flex container for all of them would shift their rows. */
 .drawer-body.lib{display:flex;flex-direction:column}
+/* Two things on one line: which build this is, and the one way to ask for a
+   newer one. The whole line used to be opacity:.5 mono — "reference, not a
+   feature" — which was right until it became the only way to re-check, and
+   then it read as a version number nobody would think to click. The version
+   keeps that weight; the action does not. */
 .lib-foot{
   margin:18px 12px 4px;padding-top:10px;border-top:1px solid var(--hair);
   font-family:var(--data);font-size:10.5px;color:var(--muted);
   margin-top:auto;          /* pushed to the bottom of the panel */
-  opacity:.5;               /* reference, not a feature */
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  cursor:pointer;
 }
-.lib-foot{cursor:pointer}
-.lib-foot:hover{opacity:.85}
+.lib-ver{opacity:.5}
+.lib-check{
+  font-family:var(--ui);font-size:11px;letter-spacing:var(--track-ui);
+  color:var(--accent);white-space:nowrap;
+}
+.lib-foot:hover .lib-ver{opacity:.8}
+.lib-foot:hover .lib-check{text-decoration:underline}
 /* ---------------------------------------------------------- library */
 
 .lib-find{display:block;padding:2px 10px 10px}
 .lib-find input{
-  width:100%;padding:8px 12px;border-radius:6px;
-  background:var(--field-2);border:1px solid var(--hair);
+  width:100%;padding:8px 12px;border-radius:var(--r-md);
+  /* --panel-2, not --field-2: this field sits inside --panel, and the bar's
+     own darker surface reads as a hole cut in the drawer rather than as
+     something you can type into. */
+  background:var(--panel-2);border:1px solid var(--hair);
   color:var(--text);font-size:13px;font-family:inherit;
 }
 .lib-find input::placeholder{color:var(--muted)}
@@ -979,7 +999,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .status-menu{
   position:fixed;z-index:40;display:flex;flex-direction:column;min-width:132px;
   background:var(--panel-2);border:1px solid var(--hair);border-radius:8px;
-  padding:4px;box-shadow:0 10px 30px var(--shadow-2);
+  padding:4px;box-shadow:var(--lift-md);
 }
 .status-opt{
   text-align:left;padding:6px 10px;border-radius:5px;
@@ -1076,7 +1096,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   display:flex;align-items:center;gap:14px;max-width:min(460px,80vw);
   padding:12px 12px 12px 16px;border-radius:10px;
   background:var(--panel-2);border:1px solid var(--hair);
-  box-shadow:0 10px 30px var(--shadow-1);
+  box-shadow:var(--lift-md);
 }
 .update-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 .update-text strong{font-size:13px;font-weight:600;color:var(--text)}
@@ -1287,7 +1307,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   position:fixed;z-index:32;width:min(280px,80vw);
   top:34vh;left:50%;transform:translateX(-50%);
   background:var(--panel-2);border:1px solid var(--hair);border-radius:10px;
-  padding:10px;box-shadow:0 8px 28px var(--shadow-3);
+  padding:10px;box-shadow:var(--lift-md);
 }
 .note-pop-text{
   width:100%;min-height:64px;resize:vertical;
@@ -1367,7 +1387,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   /* clears the status bar, and the notch when the phone is sideways */
   /* Padding only — see the desktop copy. flex-direction:column here made
      every child its own row and fought the wrap-based shape. */
-  .bar{gap:12px;padding:20px 22px 16px}
+  /* The bar's own inset. Its *surface* reaches the physical top edge — that is
+     what makes the strip behind the status bar the bar's colour rather than a
+     window background that can only ever be one colour — so its contents have
+     to move in by --safe-t themselves. Only .sync carried this before, because
+     until now Android padded the whole WebView out of the system bars and iOS
+     was never checked under a notch with the bar on screen. Seen on the real
+     device the moment the native padding came off: "NOTHING OPEN" sat behind
+     the clock. */
+  .bar{gap:12px;padding:calc(20px + var(--safe-t)) calc(22px + var(--safe-r)) 16px calc(22px + var(--safe-l))}
   /* Back to the bar's own top-right corner. Here the corner really is empty
      — the bar is a column — and in flow the pill would take a whole line of
      its own above the search box, which is what it did when this rule was
@@ -1664,7 +1692,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .sync-pop{
   position:absolute;top:calc(100% + 8px);right:0;width:296px;
   background:var(--panel);border:1px solid var(--hair);border-radius:8px;
-  padding:12px;box-shadow:0 12px 34px var(--shadow-2);
+  padding:12px;box-shadow:var(--lift-md);
   font-size:12px;color:var(--muted);line-height:1.5;
 }
 /* A <p> keeps its 1em margins unless something says otherwise, and nothing
@@ -1889,7 +1917,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   top:calc(var(--bar-h,74px) + 10px);right:14px;bottom:14px;
   width:min(430px,calc(100vw - 28px));
   border:1px solid var(--hair);border-radius:var(--r-lg);
-  box-shadow:0 18px 48px var(--shadow-2);
+  box-shadow:var(--lift-lg);
   overflow:hidden;
 }
 @media (max-width:820px), (pointer:coarse){
@@ -2107,8 +2135,16 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   display:inline-flex;align-items:center;justify-content:center;
   transition:background-color .18s ease,color .18s ease,border-color .18s ease;
 }
-.btn.theme-btn:hover{
-  background:var(--field-2-other);color:var(--text-other);border-color:var(--muted);
+/* The preview is hover-only, and it has to be *asked for* rather than assumed.
+   A tap leaves :hover latched on in a WebView, so on a phone the button sat in
+   its preview state after every press: in light mode that is --field-2-other, a
+   near-black disc with the sun still on it, which reads as the switch having
+   failed. Seen on the real device. Anything whose hover state changes what the
+   control appears to *say* belongs behind this query. */
+@media (hover: hover) and (pointer: fine) {
+  .btn.theme-btn:hover{
+    background:var(--field-2-other);color:var(--text-other);border-color:var(--muted);
+  }
 }
 .btn.theme-btn .ico-sun,.btn.theme-btn .ico-moon{
   position:absolute;inset:0;display:inline-flex;align-items:center;justify-content:center;
@@ -2119,10 +2155,12 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .btn.theme-btn .ico-moon{opacity:0}
 :root[data-theme="light"] .btn.theme-btn .ico-sun{opacity:0}
 :root[data-theme="light"] .btn.theme-btn .ico-moon{opacity:1}
-.btn.theme-btn:hover .ico-sun{opacity:0}
-.btn.theme-btn:hover .ico-moon{opacity:1}
-:root[data-theme="light"] .btn.theme-btn:hover .ico-sun{opacity:1}
-:root[data-theme="light"] .btn.theme-btn:hover .ico-moon{opacity:0}
+@media (hover: hover) and (pointer: fine) {
+  .btn.theme-btn:hover .ico-sun{opacity:0}
+  .btn.theme-btn:hover .ico-moon{opacity:1}
+  :root[data-theme="light"] .btn.theme-btn:hover .ico-sun{opacity:1}
+  :root[data-theme="light"] .btn.theme-btn:hover .ico-moon{opacity:0}
+}
 
 /* The hover label clears the tallest chapter number rather than sitting on
    top of it. The raised row's stalk reaches 18px and its number sits above

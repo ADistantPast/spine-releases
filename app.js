@@ -3435,21 +3435,26 @@ $("btnLibrary").onclick = async () => {
     $("drawerBody").classList.add("lib");
     const foot = document.createElement("p");
     foot.className = "lib-foot";
-    foot.textContent = `Spine ${a.version} · ${a.kind}`;
-    foot.title = `${a.path}
-Click to check for an update`;
-    /* Tap it to ask again. The startup check runs once, so anything released
-       while the app was already open stays invisible until the next cold
-       start — which reads as the updater being broken rather than merely
-       early. */
+    /* Two spans, because the line does two jobs: it says which build this is,
+       and it is the only way to ask for a newer one. It used to be one muted
+       mono line at half opacity — "reference, not a feature" — and nothing in
+       it suggested that clicking did anything, which is exactly how it was
+       reported. The action says what it does now. */
+    foot.innerHTML =
+      `<span class="lib-ver"></span><span class="lib-check">Check for updates</span>`;
+    foot.querySelector(".lib-ver").textContent = `Spine ${a.version} · ${a.kind}`;
+    const check = foot.querySelector(".lib-check");
+    foot.title = a.path;
+    /* Ask again by hand. The startup read polls for a while now, but a release
+       that lands while the app is open still needs a way in, and the one after
+       that too. */
     foot.onclick = async () => {
       if (foot.dataset.busy) return;
       foot.dataset.busy = "1";
-      const was = foot.textContent;
-      foot.textContent = "Checking…";
+      check.textContent = "Checking…";
       let u = null;
       try { u = await api("/api/update/check", {}); } catch (e) { /* older build */ }
-      foot.textContent = was;
+      check.textContent = "Check for updates";
       delete foot.dataset.busy;
       if (!u || u.state === "offline") return toast("Could not reach the update server.");
       if (u.state !== "available") return toast(`Spine ${a.version} is the latest.`);
