@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.0.40";
+  const WEB_VERSION = "1.0.41";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -718,8 +718,8 @@
    *
    * JavaScript rather than native, unlike sharing. A bundle is hundreds of
    * megabytes and has to be handled where the storage is; a sync record is a
-   * few hundred bytes and jsonblob answers Access-Control-Allow-Origin:*, so
-   * the page can fetch and PUT it directly. That is what lets the phone and
+   * few hundred bytes and the Worker answers Access-Control-Allow-Origin:*,
+   * so the page can talk to it directly. That is what lets the phone and
    * the web reader share one implementation instead of keeping a third
    * language byte-identical with the other two.
    *
@@ -727,8 +727,7 @@
    * device's name are yours, not the book's, and must never travel inside a
    * .spinebook. Same reasoning as the folded-series set and the shelf order.
    */
-  const SYNC_AT = "https://jsonblob.com/api/jsonBlob/{id}";
-  const SYNC_NEW = "https://jsonblob.com/api/jsonBlob";
+  const SYNC_URL = "https://spine-sync.spine-app.workers.dev";
   const SYNC_KEY = "spine.sync";
   // B32 is the Crockford alphabet already declared for the share codes above
   // — the same one, deliberately, so both kinds of code forgive the same slips.
@@ -741,70 +740,61 @@
   const saveSync = s => localStorage.setItem(SYNC_KEY, JSON.stringify(s));
   const deviceName = () => (syncState().device || "").trim() || "This device";
 
-  /* 16 bytes as 26 Crockford characters, matching sync_code() in app.py —
-     including forgiving a typed O for 0, since these are read off a screen. */
-  function syncCode(uuid) {
-    let n = BigInt("0x" + uuid.replace(/-/g, "")), out = "";
-    for (let i = 0; i < 26; i++) { out = B32[Number(n & 31n)] + out; n >>= 5n; }
-    return out.match(/.{1,4}/g).join("-");
-  }
-  function syncBlobId(code) {
+  /* The Worker hands out 26 Crockford characters already, so a code is just
+     those grouped in fours — same shape as before, and the same alphabet,
+     so a code still forgives a typed O for 0. */
+  const syncCode = id => (id || "").match(/.{1,4}/g).join("-");
+
+  /* An id from jsonblob, which no longer holds anything. It issued
+     36-character UUIDs and we stored them with their dashes, where the
+     Worker's ids are 26 characters with none — so a browser that synced
+     before this change can be told its record is gone and offered a new
+     one, rather than shown a network error nobody can act on. */
+  const syncLegacy = id => !!id && String(id).indexOf("-") >= 0;
+
+  function syncRecId(code) {
     const clean = (code || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
     if (clean.length !== 26) throw new Error("That sync code is not the right length.");
-    let n = 0n;
+    let out = "";
     for (const raw of clean) {
       const ch = { I: "1", L: "1", O: "0", U: "0" }[raw] || raw;
-      const v = B32.indexOf(ch);
-      if (v < 0) throw new Error('"' + raw + '" is not part of a Spine code.');
-      n = (n << 5n) | BigInt(v);
+      if (B32.indexOf(ch) < 0)
+        throw new Error('"' + raw + '" is not part of a Spine code.');
+      out += ch;
     }
-    const h = n.toString(16).padStart(32, "0").slice(-32);
-    return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16),
-            h.slice(16, 20), h.slice(20)].join("-");
+    return out;
   }
 
-  /* The tag says which version of the record we read, and writing back
-     conditional on it means a stale read can never overwrite a fresher
-     write — the service answers 412 and we stop rather than clobber.
-     Measured against the real thing: right tag 200, stale tag 412, and the
-     tag changes on every write. */
-  let syncTag = "";
-  async function syncFetch(id) {
-    const r = await fetch(SYNC_AT.replace("{id}", id));
-    if (r.status === 404 || r.status === 410) {
-      const e = new Error("lost"); e.lost = true; throw e;
+  /* One request to the Worker. Every sync operation is one of these.
+   *
+   * What used to be here: a read that kept an ETag, a conditional PUT, a
+   * 412 "another device synced while this one was working" branch and a 429
+   * backoff — all of it to make a store that promised nothing behave, and
+   * all of it written out again in app.py and in the phone's app.js. Three
+   * hand-mirrored copies of a concurrency protocol, in three languages,
+   * that no single-device test could catch drifting apart.
+   *
+   * A Durable Object serialises requests to a record, so none of it is
+   * needed. Which reading wins is decided there too, so this file no longer
+   * has an opinion and can no longer disagree with the other two.
+   */
+  async function syncCall(path, body) {
+    let r;
+    try {
+      r = await fetch(SYNC_URL + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+    } catch (e) {
+      throw new Error("Could not reach the sync service.");
     }
-    if (r.status === 429)
-      throw new Error("The sync service is asking us to slow down. Try again in a minute.");
+    if (r.status === 404 || r.status === 410) {
+      const e = new Error("The sync record is gone from the service.");
+      e.lost = true;
+      throw e;
+    }
     if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
-    syncTag = r.headers.get("ETag") || "";
     return r.json();
-  }
-  async function syncPut(id, payload) {
-    const headers = { "Content-Type": "application/json" };
-    if (syncTag) headers["If-Match"] = syncTag;
-    const r = await fetch(SYNC_AT.replace("{id}", id), {
-      method: "PUT", headers, body: JSON.stringify(payload) });
-    // 412 and 429 are different answers and were sharing one sentence: a
-    // rate limit read as "another device synced", which sends someone
-    // looking for a device that does not exist. Found while testing a drop
-    // that failed for the second reason and reported the first.
-    if (r.status === 412)
-      throw new Error("Another device synced while this one was working. "
-                      + "Press sync again.");
-    if (r.status === 429)
-      throw new Error("The sync service is asking us to slow down. "
-                      + "Try again in a minute.");
-    if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
-  }
-  async function syncCreate(books) {
-    const r = await fetch(SYNC_NEW, { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ v: 1, books: books || {} }) });
-    const loc = r.headers.get("Location") || "";
-    const id = loc.replace(/\/$/, "").split("/").pop();
-    if (!id) throw new Error("The sync service did not give us a place to put it.");
-    return id;
   }
 
   /* A book's own id is its slot whenever both devices hold the same file,
@@ -836,18 +826,12 @@
       // An entry keeps the name that wrote it, which is right for another
       // device and wrong for this one under an old name. Cosmetic, so it
       // never fails the rename: the next sync relabels whatever it touches.
-      if (s.id && was && was !== now) {
+      if (s.id && was && was !== now && !syncLegacy(s.id)) {
         try {
-          const rec = await syncFetch(s.id);
-          const held = rec.books || {};
-          const mine = Object.keys(held).filter(k => (held[k].by || "") === was);
-          if (mine.length) {
-            mine.forEach(k => { held[k].by = now; });
-            await syncPut(s.id, { v: 1, books: held });
-            s.mirror = held;
-            if ((s.lastBy || "") === was) s.lastBy = now;
-            saveSync(s);
-          }
+          const out = await syncCall("/name", { id: s.id, from: was, to: now });
+          s.mirror = (out.record || {}).books || {};
+          if ((s.lastBy || "") === was) s.lastBy = now;
+          saveSync(s);
         } catch (e) { /* renamed here regardless */ }
       }
       return { device: now };
@@ -859,12 +843,8 @@
       const slot = String(body.slot || "").trim();
       if (!s.id || !slot) return { error: "Nothing to remove." };
       try {
-        const rec = await syncFetch(s.id);
-        const held = rec.books || {};
-        if (!(slot in held)) return { ok: true, gone: true };
-        delete held[slot];
-        await syncPut(s.id, { v: 1, books: held });
-        s.mirror = held;
+        const out = await syncCall("/drop", { id: s.id, slot });
+        s.mirror = (out.record || {}).books || {};
         saveSync(s);
         return { ok: true };
       } catch (e) {
@@ -878,14 +858,15 @@
     }
     if (rest === "new" && post) {
       try {
-        saveSync({ id: await syncCreate(), last: 0, device: s.device || "" });
-        return { code: syncCode(syncState().id) };
+        const out = await syncCall("/new", { by: deviceName(), books: {} });
+        saveSync({ id: out.id, last: 0, device: s.device || "" });
+        return { code: syncCode(out.id) };
       } catch (e) { return { error: e.message }; }
     }
     if (rest === "join" && post) {
       try {
-        const id = syncBlobId(body.code);
-        await syncFetch(id);
+        const id = syncRecId(body.code);
+        await syncCall("/read", { id });        // prove it exists before keeping it
         saveSync({ id, last: 0, device: s.device || "" });
         return { code: syncCode(id) };
       } catch (e) {
@@ -894,7 +875,8 @@
     }
     if (rest === "rebuild" && post) {
       try {
-        s.id = await syncCreate(s.mirror || {});
+        const out = await syncCall("/new", { by: deviceName(), books: s.mirror || {} });
+        s.id = out.id;
         s.lost = false;
         saveSync(s);
         return { code: syncCode(s.id), carried: Object.keys(s.mirror || {}).length };
@@ -910,39 +892,44 @@
     if (rest === "now" && post) {
       if (!s.id) return { error: "No sync code yet." };
       const now = Math.floor(Date.now() / 1000);
-      let remote;
-      try { remote = (await syncFetch(s.id)).books || {}; }
-      catch (e) {
-        if (!e.lost) return { error: e.message };
+      const who = deviceName();
+      const lost = () => {
         s.lost = true; saveSync(s);
         return { lost: true, carried: Object.keys(s.mirror || {}).length,
-                 error: "The sync record is gone from the service." };
-      }
+                 error: "The sync record is gone from the service. Start a new one and this device's positions carry over — the other devices need the new code." };
+      };
+      if (syncLegacy(s.id)) return lost();
 
-      const who = deviceName(), pulled = [];
+      // What this device has to say. Which reading wins is not decided here
+      // any more; that is the Worker's, and having it in one place instead
+      // of three is most of why sync was rebuilt.
+      const mine = {}, retire = [];
       for (const slot of Object.keys(slots)) {
         const b = slots[slot];
-        const mine = { name: b.title || "", pos: +(b.position || 0),
-                       dur: +(b.duration || 0), at: b.positionAt || 0, by: who };
-        const theirs = remote[slot];
-        /* Newest wins, per book. Not furthest: going back to re-hear a
-           chapter is deliberate and must not be undone by a stale reading
-           from the other device. */
-        if (theirs && (theirs.at || 0) > mine.at) {
+        if (!(b.positionAt || 0)) { b.positionAt = now; await putBook(b); }
+        mine[slot] = { name: b.title || "", pos: +(b.position || 0),
+                       dur: +(b.duration || 0), at: b.positionAt || 0 };
+      }
+      // clear what a pairing left behind under the book's own id
+      for (const b of books) if (b.syncSlot && b.syncSlot !== b.id) retire.push(b.id);
+
+      let out;
+      try { out = await syncCall("/sync", { id: s.id, by: who, books: mine, retire }); }
+      catch (e) { return e.lost ? lost() : { error: e.message }; }
+
+      const remote = (out.record || {}).books || {};
+      const pushed = (out.took || []).filter(k => slots[k]).map(k => slots[k].title || k);
+      const pulled = [], pulledIds = [];
+      for (const slot of Object.keys(slots)) {
+        const b = slots[slot], theirs = remote[slot];
+        if (theirs && (theirs.at || 0) > (b.positionAt || 0)) {
           b.position = +(theirs.pos || 0);
           b.positionAt = theirs.at || 0;
           await putBook(b);
           pulled.push(b.title || slot);
-        } else {
-          if (!mine.at) { mine.at = now; b.positionAt = now; await putBook(b); }
-          if (!theirs || mine.at > (theirs.at || 0)) remote[slot] = mine;
+          pulledIds.push(b.id);
         }
       }
-      // clear what a pairing left behind under the book's own id
-      for (const b of books) if (b.syncSlot && b.syncSlot !== b.id) delete remote[b.id];
-
-      try { await syncPut(s.id, { v: 1, books: remote }); }
-      catch (e) { return { error: e.message }; }
 
       const entries = Object.keys(remote).map(k => remote[k]);
       // High-water mark, not our own clock: a reading pulled from a device
@@ -951,6 +938,12 @@
       s.mirror = remote;
       s.lost = false;
       s.lastBy = (entries.slice().sort((a, c) => (c.at || 0) - (a.at || 0))[0] || {}).by || who;
+      // Where each other device has got to, so the reader can mark it.
+      s.others = {};
+      for (const k of Object.keys(remote))
+        if ((remote[k].by || "") !== who)
+          s.others[k] = { pos: +(remote[k].pos || 0), by: remote[k].by || "",
+                          at: remote[k].at || 0 };
       saveSync(s);
 
       const taken = {};
@@ -964,7 +957,8 @@
                    .slice(0, 4)
                    .map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
       });
-      return { ok: true, last: s.last, by: s.lastBy, pulled, pushed: [], unmatched };
+      return { ok: true, last: s.last, by: s.lastBy, pulled, pushed,
+               pulledIds, others: s.others, unmatched };
     }
     return { error: "The web reader has no /api/sync/" + rest + "." };
   }

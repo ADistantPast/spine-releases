@@ -98,8 +98,11 @@ $("btnImport").onclick = () => {
      have been read a code and you want to type it. Opening a file is the
      fallback, and the explanation belongs under both rather than wedged
      between them. */
+  /* No label above the field. It sat between the top of the drawer and the
+     one thing you came here to use, and said only what the placeholder
+     already shows — so it cost the code box its place at the top for
+     nothing. */
   $("drawerBody").innerHTML = `
-    <p class="hint">Type the code someone sent you</p>
     <div class="code-entry">
       <input id="codeIn" class="code-in" spellcheck="false" autocomplete="off"
              autocapitalize="off" placeholder="0jhyvy-A7K2-M9QX-P4LT-N3RB">
@@ -1445,6 +1448,39 @@ $("clockNow").onclick = () => {
   el.focus();
   document.getSelection().selectAllChildren(el);
 };
+/* Digits fill in from the right, so 34322 reads 3:43:22 as you type it.
+   Nobody wants to reach for a colon on a phone keyboard, and a bare number
+   was ambiguous anyway — 130 could reasonably mean either 130 seconds or
+   1:30, and now it visibly means the second one before you commit to it.
+
+   Typing the colons yourself still works and lands in exactly the same
+   place, because they are stripped and re-inserted: "1:02:03" and "10203"
+   both come back as "1:02:03". One and two digits are also unchanged — 90
+   stays "90", which the fold below still reads as 90 seconds, so the plain
+   seconds entry that was here before still behaves the way it always did. */
+function fillTimecode(text) {
+  const d = String(text || "").replace(/\D/g, "").slice(-6);
+  if (!d) return "";
+  const parts = [d.slice(0, -4), d.slice(-4, -2), d.slice(-2)].filter(p => p !== "");
+  return parts.join(":");
+}
+
+$("clockNow").addEventListener("input", () => {
+  if (!editingClock) return;
+  const el = $("clockNow");
+  const want = fillTimecode(el.textContent);
+  if (want === el.textContent) return;
+  el.textContent = want;
+  // Back to the end. Digits only ever arrive at the end, so this is where
+  // the caret already was — it just does not survive rewriting the node.
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+});
+
 function commitClock(cancel) {
   if (!editingClock) return;          // committed already, or never started
   const el = $("clockNow");
@@ -1758,6 +1794,18 @@ function checkSleep() {
 // no window to resize on a phone — this is a plain layout toggle, unlike
 // the desktop's pop-out (which also asks pywebview to shrink the window)
 $("btnPop").onclick = $("btnPopExit").onclick = () => {
+  /* Collapsing the page scrolls it, and nobody scrolled it.
+     .app.compact .reader is height:0, so switching views clamps its
+     scrollTop and the browser fires a scroll event — one going in, one
+     coming back out (measured: 1 each way, position preserved across both).
+     That scroll lands a frame after the button press, so the press is still
+     inside USER_SCROLL_GRACE and the reader's listener read it as somebody
+     deciding to read ahead: stopFollowing() ran immediately after the
+     snapToPlayhead() below, switching following straight back off and
+     raising the pill over a book that had just been asked to follow.
+     Reported as the reading view not keeping up with the voice.
+     autoScrollUntil is the existing way to say "this one was us". */
+  autoScrollUntil = performance.now() + 900;
   compact = !compact;
   $("app").classList.toggle("compact", compact);
   $("transport").classList.remove("expanded");   // the reading view opens clean
@@ -1877,6 +1925,10 @@ for (const ev of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart"
   addEventListener(ev, markUserInput, { passive: true, capture: true });
 
 $("reader").addEventListener("scroll", () => {
+  // A page that is not on screen cannot have been scrolled by anyone. The
+  // reading view collapses it to height:0, which scrolls it; belt and braces
+  // alongside the toggle's own autoScrollUntil, and it states the reason.
+  if (compact) return;
   const now = performance.now();
   if (now < autoScrollUntil) return;
   if (now - lastUserInput > USER_SCROLL_GRACE) return;
@@ -1952,6 +2004,18 @@ function snapOnReturn() {
   follow = true;
   browseT = audio.currentTime;
   snapToPlayhead("instant");
+  /* Longer than a scroll animation needs, because the scroll this has to
+     survive is not ours and does not arrive on our schedule. Coming back to
+     a backgrounded page restores the scroll position and re-runs the
+     viewport listener, and either can fire well after the snap has
+     finished — at which point the tap that brought the app forward is still
+     fresh enough to look like a gesture. Reported as: leave the app playing,
+     come back, and the text no longer follows the voice.
+
+     After the snap, not before: browseTo() sets its own 900ms window, so
+     widening it first only got it overwritten a line later. Measured — a
+     scroll 900ms after the return still broke following until this moved. */
+  autoScrollUntil = performance.now() + 2000;
 }
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) setTimeout(snapOnReturn, 60);
@@ -3011,6 +3075,13 @@ function wireLibrary() {
        every other button slid sideways to take up the slack. */
     btn.classList.add("editing-src");
     btn.after(input);
+    /* Over the button it replaces, wherever that button happens to sit.
+       The editor used to be pinned to the row's right edge, which was only
+       ever right because the series button was the last thing before the
+       trash; the row is left-aligned now and the trash is the only thing
+       out there. offsetLeft is measured against .lib-actions, which is
+       position:relative for exactly this. */
+    input.style.left = btn.offsetLeft + "px";
     input.focus();
     input.select();
     /* The row's own click opens the book. The button this replaced carried
@@ -3705,8 +3776,7 @@ function syncOnChapter(t) {
  * a server without the route makes api() throw, which is unambiguous, and
  * after that there is no point asking again.
  */
-const SYNC_AT = "https://jsonblob.com/api/jsonBlob/{id}";
-const SYNC_NEW = "https://jsonblob.com/api/jsonBlob";
+const SYNC_URL = "https://spine-sync.spine-app.workers.dev";
 const SYNC_LS = "spine.sync";
 const SYNC_B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SYNC_NEAR = 3.0;          // two rips of one book agree within a second
@@ -3729,58 +3799,61 @@ const lsSync = () => { try { return JSON.parse(localStorage.getItem(SYNC_LS)) ||
 const lsSave = s => localStorage.setItem(SYNC_LS, JSON.stringify(s));
 const lsDevice = () => (lsSync().device || "").trim() || "This device";
 
-function lsCode(uuid) {
-  let n = BigInt("0x" + uuid.replace(/-/g, "")), out = "";
-  for (let i = 0; i < 26; i++) { out = SYNC_B32[Number(n & 31n)] + out; n >>= 5n; }
-  return out.match(/.{1,4}/g).join("-");
-}
-function lsBlob(code) {
+// The Worker hands out 26 Crockford base32 characters already, so a code is
+// just those grouped in fours. You type it once per device, by hand.
+const lsCode = id => (id || "").match(/.{1,4}/g).join("-");
+
+/* An id from jsonblob, which no longer holds anything. It issued 36-character
+   UUIDs and we stored them with their dashes, where the Worker's ids are 26
+   characters with none — so an install that synced before this change can be
+   told plainly that its record is gone, and offered a new one, instead of
+   being shown a network error nobody can act on. */
+const lsLegacy = id => !!id && String(id).indexOf("-") >= 0;
+
+function lsRecId(code) {
   const clean = (code || "").replace(/[^0-9A-Za-z]/g, "").toUpperCase();
   if (clean.length !== 26) throw new Error("That sync code is not the right length.");
-  let n = 0n;
+  let out = "";
   for (const raw of clean) {
     const ch = { I: "1", L: "1", O: "0", U: "0" }[raw] || raw;
-    const v = SYNC_B32.indexOf(ch);
-    if (v < 0) throw new Error('"' + raw + '" is not part of a Spine code.');
-    n = (n << 5n) | BigInt(v);
+    if (SYNC_B32.indexOf(ch) < 0)
+      throw new Error('"' + raw + '" is not part of a Spine code.');
+    out += ch;
   }
-  const h = n.toString(16).padStart(32, "0").slice(-32);
-  return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20)].join("-");
+  return out;
 }
 
-/* Conditional writes, as in app.py and shelf.js: the tag from the read is
-   sent back with the write, so a stale read is refused rather than allowed
-   to overwrite a fresher one. Losing the race asks for another press, which
-   is the honest answer — the other device's reading is as real as ours. */
-let lsTag = "";
-async function lsGet(id) {
-  const r = await fetch(SYNC_AT.replace("{id}", id));
-  if (r.status === 404 || r.status === 410) { const e = new Error("lost"); e.lost = true; throw e; }
-  if (r.status === 429) throw new Error("The sync service is asking us to slow down. Try again in a minute.");
+/* One request to the Worker. Every sync operation is one of these.
+ *
+ * What used to be here: a read that kept an ETag, a conditional PUT, a 412
+ * "another device got there first" branch and a 429 backoff — all of it to
+ * make a store that promised nothing behave, and all of it written out again
+ * in app.py and in shelf.js. Three hand-mirrored copies of a concurrency
+ * protocol, in three languages, that no single-device test could catch
+ * drifting apart. That is the likeliest reason sync never worked between this
+ * phone and the desktop.
+ *
+ * A Durable Object serialises requests to a record, so none of it is needed.
+ * Which reading wins is decided there too — this file no longer has an
+ * opinion, and so can no longer disagree with the desktop.
+ */
+async function wCall(path, body) {
+  let r;
+  try {
+    r = await fetch(SYNC_URL + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error("Could not reach the sync service.");
+  }
+  if (r.status === 404 || r.status === 410) {
+    const e = new Error("The sync record is gone from the service.");
+    e.lost = true;
+    throw e;
+  }
   if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
-  lsTag = r.headers.get("ETag") || "";
   return r.json();
-}
-async function lsPut(id, payload) {
-  const headers = { "Content-Type": "application/json" };
-  if (lsTag) headers["If-Match"] = lsTag;
-  const r = await fetch(SYNC_AT.replace("{id}", id), {
-    method: "PUT", headers, body: JSON.stringify(payload) });
-  // 412 and 429 are different answers: a rate limit is not another device,
-  // and saying it was sends someone looking for one that does not exist.
-  if (r.status === 412)
-    throw new Error("Another device synced while this one was working. Press sync again.");
-  if (r.status === 429)
-    throw new Error("The sync service is asking us to slow down. Try again in a minute.");
-  if (!r.ok) throw new Error("The sync service answered " + r.status + ".");
-}
-async function lsNew(books) {
-  const r = await fetch(SYNC_NEW, { method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ v: 1, books: books || {} }) });
-  const id = (r.headers.get("Location") || "").replace(/\/$/, "").split("/").pop();
-  if (!id) throw new Error("The sync service did not give us a place to put it.");
-  return id;
 }
 
 async function localSync(path, body) {
@@ -3808,45 +3881,49 @@ async function localSync(path, body) {
     // device and wrong for this one under an old name — the panel then goes
     // on crediting a name you have just renamed away from. Cosmetic, so a
     // failure here never fails the rename itself.
-    if (s.id && was && was !== now) {
+    if (s.id && was && was !== now && !lsLegacy(s.id)) {
       try {
-        const books = (await lsGet(s.id)).books || {};
-        const hits = Object.keys(books).filter(k => (books[k].by || "") === was);
-        if (hits.length) {
-          hits.forEach(k => { books[k].by = now; });
-          await lsPut(s.id, { v: 1, books });
-          s.mirror = books;
-          if ((s.lastBy || "") === was) s.lastBy = now;
-          lsSave(s);
-        }
+        const out = await wCall("/name", { id: s.id, from: was, to: now });
+        s.mirror = (out.record || {}).books || {};
+        if ((s.lastBy || "") === was) s.lastBy = now;
+        lsSave(s);
       } catch (e) { /* renamed here, and the next sync relabels the rest */ }
     }
     return { device: now };
   }
   if (rest === "forget") { localStorage.removeItem(SYNC_LS); return { ok: true }; }
   if (rest === "new") {
-    try { lsSave({ id: await lsNew(), last: 0, device: s.device || "" });
-          return { code: lsCode(lsSync().id) }; }
-    catch (e) { return { error: e.message }; }
+    try {
+      const out = await wCall("/new", { by: lsDevice(), books: {} });
+      lsSave({ id: out.id, last: 0, device: s.device || "" });
+      return { code: lsCode(out.id) };
+    } catch (e) { return { error: e.message }; }
   }
   if (rest === "join") {
-    try { const id = lsBlob(body.code); await lsGet(id);
-          lsSave({ id, last: 0, device: s.device || "" }); return { code: lsCode(id) }; }
-    catch (e) { return { error: e.lost ? "There is nothing at that code any more." : e.message }; }
+    try {
+      const id = lsRecId(body.code);
+      await wCall("/read", { id });            // prove it exists before keeping it
+      lsSave({ id, last: 0, device: s.device || "" });
+      return { code: lsCode(id) };
+    } catch (e) {
+      return { error: e.lost
+        ? "There is nothing at that code any more. Make a new one on the device that has your positions, then join with that."
+        : e.message };
+    }
   }
   if (rest === "rebuild") {
-    try { s.id = await lsNew(s.mirror || {}); s.lost = false; lsSave(s);
-          return { code: lsCode(s.id), carried: Object.keys(s.mirror || {}).length }; }
-    catch (e) { return { error: e.message }; }
+    try {
+      const out = await wCall("/new", { by: lsDevice(), books: s.mirror || {} });
+      s.id = out.id; s.lost = false; lsSave(s);
+      return { code: lsCode(s.id), carried: Object.keys(s.mirror || {}).length };
+    } catch (e) { return { error: e.message }; }
   }
   if (rest === "drop") {
     if (!s.id || !body.slot) return { error: "Nothing to remove." };
     try {
-      const books = (await lsGet(s.id)).books || {};
-      if (!(body.slot in books)) return { ok: true, gone: true };
-      delete books[body.slot];
-      await lsPut(s.id, { v: 1, books });
-      s.mirror = books; lsSave(s);
+      const out = await wCall("/drop", { id: s.id, slot: body.slot });
+      s.mirror = (out.record || {}).books || {};
+      lsSave(s);
       return { ok: true };
     } catch (e) {
       return { error: e.lost ? "The sync record is gone from the service." : e.message };
@@ -3859,49 +3936,60 @@ async function localSync(path, body) {
   if (rest === "now") {
     if (!s.id) return { error: "No sync code yet." };
     const now = Math.floor(Date.now() / 1000);
-    let remote;
-    try { remote = (await lsGet(s.id)).books || {}; }
-    catch (e) {
-      if (!e.lost) return { error: e.message };
+    const who = lsDevice();
+    const lost = () => {
       s.lost = true; lsSave(s);
       return { lost: true, carried: Object.keys(s.mirror || {}).length,
-               error: "The sync record is gone from the service." };
-    }
+               error: "The sync record is gone from the service. Start a new one and this device's positions carry over — the other devices need the new code." };
+    };
+    if (lsLegacy(s.id)) return lost();
 
-    const who = lsDevice(), pulled = [];
+    // What this device has to say. Which reading wins is not decided here
+    // any more; that is the Worker's, and having it in one place instead of
+    // three is most of why sync was rebuilt.
+    const mine = {}, retire = [];
     for (const slot of Object.keys(slots)) {
       const b = slots[slot];
-      const mine = { name: b.title || "", pos: +(b.position || 0),
-                     dur: +(b.duration || 0), at: b.positionAt || 0, by: who };
-      const theirs = remote[slot];
-      /* Newest wins, per book. Not furthest: going back to re-hear a chapter
-         is deliberate and must not be undone by a stale reading. */
-      if (theirs && (theirs.at || 0) > mine.at) {
+      mine[slot] = { name: b.title || "", pos: +(b.position || 0),
+                     dur: +(b.duration || 0), at: b.positionAt || 0 };
+    }
+    // A book paired to another device's slot leaves an orphan under its own
+    // id, which would ask to be paired again at every sync, for ever.
+    for (const b of shelf) if (b.syncSlot && b.syncSlot !== b.id) retire.push(b.id);
+
+    let out;
+    try { out = await wCall("/sync", { id: s.id, by: who, books: mine, retire }); }
+    catch (e) { return e.lost ? lost() : { error: e.message }; }
+
+    const remote = (out.record || {}).books || {};
+    const pushed = (out.took || []).filter(k => slots[k]).map(k => slots[k].title || k);
+    const pulled = [], pulledIds = [];
+    for (const slot of Object.keys(slots)) {
+      const b = slots[slot], theirs = remote[slot];
+      if (theirs && (theirs.at || 0) > (b.positionAt || 0)) {
         await api("/api/position/" + b.id, { t: +(theirs.pos || 0) });
         pulled.push(b.title || slot);
-        // the write stamps its own positionAt, so this device is now the
-        // most recent writer — which is true, and keeps the record honest
-        remote[slot] = { ...theirs, at: Math.floor(Date.now() / 1000), by: who };
-      } else {
-        if (!theirs || mine.at > (theirs.at || 0)) remote[slot] = mine;
+        pulledIds.push(b.id);
       }
     }
-    for (const b of shelf) if (b.syncSlot && b.syncSlot !== b.id) delete remote[b.id];
-
-    try { await lsPut(s.id, { v: 1, books: remote }); }
-    catch (e) { return { error: e.message }; }
 
     // Forgotten, or paired to another code, while this ran — the dot starts
     // a sync when it is pressed, so "press the dot, press Forget" is the
     // ordinary way to use the panel. Saving our copy of the state here put
     // the forgotten code straight back. Same guard as app.py's.
-    if ((lsSync().id || "") !== s.id) return { ok: true, forgotten: true, pulled, pushed: [] };
+    if ((lsSync().id || "") !== s.id)
+      return { ok: true, forgotten: true, pulled, pushed };
 
     const all = Object.keys(remote).map(k => remote[k]);
     s.last = Math.max.apply(null, [now].concat(all.map(e => e.at || 0)));
     s.mirror = remote;
     s.lost = false;
     s.lastBy = (all.slice().sort((a, c) => (c.at || 0) - (a.at || 0))[0] || {}).by || who;
+    // Where each other device has got to, so the reader can mark it.
+    s.others = {};
+    for (const k of Object.keys(remote))
+      if ((remote[k].by || "") !== who)
+        s.others[k] = { pos: +(remote[k].pos || 0), by: remote[k].by || "", at: remote[k].at || 0 };
     lsSave(s);
 
     const free = shelf.filter(b => !b.syncSlot);
@@ -3912,7 +4000,8 @@ async function localSync(path, body) {
                  .filter(b => e.dur && Math.abs((b.duration || 0) - e.dur) <= SYNC_NEAR)
                  .slice(0, 4).map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
     });
-    return { ok: true, last: s.last, by: s.lastBy, pulled, pushed: [], unmatched };
+    return { ok: true, last: s.last, by: s.lastBy, pulled, pushed,
+             pulledIds, others: s.others, unmatched };
   }
   return { error: "No such sync route." };
 }
