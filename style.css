@@ -11,6 +11,10 @@
   /* the lower of the two staggered chapter rows — same hue, burnt back a
      little so the two rows read as two rows at a glance */
   --oxide-low:#9C4F37;
+  /* and the raised row's stalk, one step further back again. The number on
+     that row still has to be read; its line only has to be followed, and it
+     is the thing that crosses the row in front of it. */
+  --oxide-back:#7A3C2A;
   --moss:#7DA463;
   --gilt:#C8A54B;
   --dust:#79828F;
@@ -385,6 +389,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 .track::before{
   content:"";position:absolute;left:0;right:0;top:50%;height:3px;
   transform:translateY(-50%);background:var(--hair);
+  /* Above the chapter stalks, below the marks and the thumb. The order the
+     owner asked for, nearest first: the squircle, then this line, then the
+     near row of numbers and their stalks, then the raised row's. So a stalk
+     rises from behind the rule rather than crossing it, which is what makes
+     the two rows read as two depths instead of one tangle.
+
+     And it must not take a press. A pseudo-element hit-tests as part of the
+     element it belongs to, so once this painted above #seek the rule was
+     quietly swallowing every click along the centre of the track — measured
+     as the slider being grabbable at 0 of 49 points across its width. It is
+     a drawn line; nothing should ever land on it. */
+  z-index:5;pointer-events:none;
 }
 #seek{
   position:absolute;left:0;top:0;width:100%;height:34px;z-index:2;margin:0;
@@ -394,10 +410,13 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   touch-action:pan-y;
 }
 #seek::-webkit-slider-thumb{
-  /* a rounded square rather than a dot: smaller, and it reads as a
-     marker on a ruled track instead of a bead on a string */
+  /* Kept at its real size and made invisible: the size is what gives the
+     drag its geometry, and .seek-thumb draws the squircle on top of
+     everything instead. The input cannot be lifted above the chapter marks
+     without taking its whole box with it, and that box is what was
+     swallowing the lower row. */
   -webkit-appearance:none;width:11px;height:11px;border-radius:3.5px;
-  background:var(--verdigris);border:0;
+  background:transparent;border:0;
 }
 
 /* Inset by exactly half the seek thumb, because that is how far in the
@@ -409,7 +428,14 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
    thumb is the thing you drag and it must never look like it is hiding
    behind a marker. Same inset as .ticks, and for the same reason: half the
    thumb's width is exactly how far its centre can travel. */
-.marks{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none;z-index:1}
+.marks{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none;z-index:6}
+/* The thumb, drawn by us. Same inset and the same travel as .marks, because
+   it has to land on exactly the position the input reports. */
+.thumbline{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none;z-index:7}
+.seek-thumb{
+  position:absolute;top:50%;left:0;width:11px;height:11px;border-radius:3.5px;
+  transform:translate(-50%,-50%);background:var(--verdigris);
+}
 .mark{
   position:absolute;top:50%;left:0;width:6px;height:6px;   /* half the thumb */
   border-radius:2px;transform:translate(-50%,-50%);
@@ -465,7 +491,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
 /* The near row is the brighter of the two and the raised row sits back —
    the nearer thing reads as nearer. This was the other way round and read
    as depth running backwards. */
-.timeline.stagger .tick.alt::before{background:var(--oxide-low)}
+.timeline.stagger .tick.alt::before{background:var(--oxide-back)}
 .timeline.stagger .tick.alt .tick-n{color:var(--oxide-low)}
 .timeline.stagger .tick.alt:hover::before,
 .timeline.stagger .tick.alt.on::before{background:var(--verdigris)}
@@ -506,7 +532,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   position:absolute;bottom:calc(100% + 14px);left:50%;transform:translateX(-50%);
   background:var(--slab-2);border:1px solid var(--hair);
   padding:5px 10px;border-radius:6px;font-size:12.5px;white-space:nowrap;
-  pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:6;
+  pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:8;
   max-width:40vw;overflow:hidden;text-overflow:ellipsis;
 }
 .tick.note + .tick-label{bottom:auto;top:calc(100% + 14px)}
@@ -1254,9 +1280,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--verdigris);outline:none}
   .tp{min-width:56px;height:46px;font-size:14px}
   .tp.play{width:68px;height:46px;font-size:18px}
   #seek::-webkit-slider-thumb{width:14px;height:14px;border-radius:4.5px}
+  .seek-thumb{width:14px;height:14px;border-radius:4.5px}
   /* both track the thumb: half its width for the marks, half its width as
      the inset for anything positioned along the track */
   .ticks,.marks{left:7px;right:7px}
+  .thumbline{left:7px;right:7px}
   .mark{width:7px;height:7px;border-radius:2.5px}
   /* only the tray gets surfaces — the transport arrows read fine as bare
      glyphs flanking the play button, and boxing them made the row noisy */

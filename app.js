@@ -258,7 +258,7 @@ function applyPendingStart() {
   browseT = t;
   // the bar is only driven by the playback loop, which is not running
   // while the book sits paused at the place it reopened to
-  $("seek").value = Math.floor(t);
+  $("seek").value = Math.floor(t); paintThumb();
   playUi();
   /* A reload that interrupted playback carries on by itself — see
      audio.onerror. Done here rather than beside the src assignment so the
@@ -936,7 +936,7 @@ function frame() {
     // playback would drag the thumb out from under your thumb.
     if (follow && !cpOpen) {
       browseT = t;
-      $("seek").value = Math.floor(t);
+      $("seek").value = Math.floor(t); paintThumb();
     }
     if (compact) {
       // Only while following — renderLyric() recentres the view on every
@@ -1355,7 +1355,7 @@ function playFrom(t) {
 function browseTo(t, behavior) {
   if (!book) return;
   browseT = clampT(t);
-  $("seek").value = Math.floor(browseT);
+  $("seek").value = Math.floor(browseT); paintThumb();
   scrollToTime(browseT, behavior || "instant");
 }
 
@@ -1371,6 +1371,23 @@ function playUi() {
   if (!book) return;
   if (!editingClock) $("clockNow").textContent = clock(audio.currentTime);
   positionPlayMark();
+}
+
+/* The squircle is ours to draw now, so it has to be told where to sit.
+   The input still owns the gesture and its value is still the truth — this
+   only reads it. Guarded the same way positionPlayMark() is: this runs on
+   every frame while playing, and 0.01% is a fifth of a pixel on a 2000px
+   track. */
+let lastThumbPct = -1;
+function paintThumb() {
+  const el = $("seek"), th = $("seekThumb");
+  if (!el || !th) return;
+  const lo = +el.min || 0, hi = +el.max || 1;
+  const v = Math.min(Math.max(+el.value || 0, lo), hi);
+  const pct = hi > lo ? (v - lo) / (hi - lo) * 100 : 0;
+  if (Math.abs(pct - lastThumbPct) < 0.01) return;
+  lastThumbPct = pct;
+  th.style.left = `${pct}%`;
 }
 
 /* The play mark moves every frame while playing, so it is worth not
@@ -1653,6 +1670,7 @@ $("nextCh").onclick = () => {
    reading yet" — the first move of a drag must not tick. */
 let scrubChapter = -1;
 $("seek").oninput = e => {
+  paintThumb();                 // during the drag, not only after it
   if (!book) return;
   /* A finger resting on the track is waiting for the chapter reel, not
      scrubbing. Put the thumb back where it was and ignore the drift —
@@ -1891,7 +1909,7 @@ function syncBarToView() {
     const t = timeAtViewTop();
     if (t === null) return;
     browseT = clampT(t);
-    $("seek").value = Math.floor(browseT);   // never scrollToTime here: that would
+    $("seek").value = Math.floor(browseT); paintThumb();   // never scrollToTime here: that would
          // scroll the page we are reading the position from
   }, 50);
 }
@@ -1971,7 +1989,7 @@ function snapToPlayhead(behavior) {
   lastWordTop = -1;
   showJump(false);
   browseT = audio.currentTime;
-  $("seek").value = Math.floor(browseT);
+  $("seek").value = Math.floor(browseT); paintThumb();
   if (compact) { renderLyric(audio.currentTime, true); return; }
   /* Back on the page: scroll AND move the lit word. scrollToTime works out
      which word it is only to know what to scroll to — it never touches the

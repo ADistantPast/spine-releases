@@ -94,6 +94,14 @@
             <div class="mark" id="playMark"></div>
           </div>
           <div class="ticks" id="ticks"></div>
+          <!-- The squircle you drag, drawn by us rather than by the input.
+               The native thumb cannot be lifted above the chapter marks
+               without lifting the whole <input> with it, and that is what
+               made the lower row of marks unclickable. So the input keeps
+               the gesture and this keeps the appearance. -->
+          <div class="thumbline">
+            <div class="seek-thumb" id="seekThumb"></div>
+          </div>
         </div>
         <span class="clock dim" id="clockEnd">0:00:00</span>
       </div>
