@@ -4,6 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Spine</title>
+  <!-- The theme, before the first paint.
+       Inline and synchronous on purpose: a stylesheet media query would work
+       too, but then the light palette has to be written twice — once for
+       prefers-color-scheme and once for the explicit override. Setting the
+       attribute here lets the CSS carry one light block, and there is no
+       flash of the wrong theme because nothing has painted yet. -->
+  <script>
+    (function () {
+      var t = "dark";
+      try {
+        t = localStorage.getItem("spine.theme")
+            || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch (e) { /* storage refused; dark is the honest default */ }
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
 <link rel="stylesheet" href="style.css">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#12161C">
@@ -26,20 +42,31 @@
         <label class="find">
           <input id="find" type="search" placeholder="Find a word or chapter" autocomplete="off">
         </label>
-        <button class="btn" id="btnImport">Import</button>
-        <button class="btn ghost" id="btnLibrary">Library</button>
-        <button class="btn ghost" id="btnChapters">Chapters</button>
-        <button class="btn ghost" id="btnNotes">Notes</button>
-      </div>
-      <!-- Where you are with your books, shared between your own devices.
-           Absolutely positioned so it uses the empty top-right of the bar
-           without shoving the title or the button row around — the same
-           reasoning as the series editor. -->
-      <div class="sync" id="syncWrap">
-        <button class="sync-btn" id="syncDot" title="Syncing between your devices">
-          <span class="sync-led" id="syncLed"></span><span id="syncLabel">Sync</span>
+        <!-- Where you are with your books, shared between your own devices.
+             In the row with the rest of them now. It used to be absolutely
+             positioned into the bar's empty top-right, which meant one
+             placement for the wide bar and another for the column — and the
+             cascade got that wrong twice. In the flow it needs neither. -->
+        <div class="sync" id="syncWrap">
+          <button class="sync-btn" id="syncDot" title="Syncing between your devices">
+            <span class="sync-led" id="syncLed"></span><span id="syncLabel">Sync</span>
+          </button>
+          <div class="sync-pop" id="syncPop" hidden></div>
+        </div>
+        <!-- Dark or light, showing the thing you would be switching *to*.
+             Left of the segmented bar: out on the right it was setting the
+             row's end, and the tabs sit better against their own width.
+             Filled from SUN_ICON / MOON_ICON so each is drawn once. -->
+        <button class="btn ghost icon-btn theme-btn" id="btnTheme" title="Switch to light">
+          <span class="ico-sun"></span><span class="ico-moon"></span>
         </button>
-        <div class="sync-pop" id="syncPop" hidden></div>
+        <div class="segbar" id="segbar" role="tablist">
+          <div class="seg-ind" id="segInd" aria-hidden="true"></div>
+          <button class="seg-btn" id="btnImport" role="tab">Import</button>
+          <button class="seg-btn" id="btnLibrary" role="tab">Library</button>
+          <button class="seg-btn" id="btnChapters" role="tab">Chapters</button>
+          <button class="seg-btn" id="btnNotes" role="tab">Notes</button>
+        </div>
       </div>
       <!-- A phone has no window to pop out of, so this reads as a plain
            switch back to the full page rather than a "close the pop-out". -->
@@ -75,11 +102,11 @@
       <div class="grab" id="grab" title="Swipe up for more controls"></div>
 
       <div class="tp-row primary">
-        <button class="tp" id="prevCh" title="Previous chapter">|&#9664;</button>
-        <button class="tp" id="back30" title="Back 30 seconds">&#9664;&thinsp;30</button>
-        <button class="tp play" id="playPause" title="Play or pause (space)">&#9654;</button>
-        <button class="tp" id="fwd30" title="Forward 30 seconds">30&thinsp;&#9654;</button>
-        <button class="tp" id="nextCh" title="Next chapter">&#9654;|</button>
+        <button class="tp icon-btn" id="prevCh" title="Previous chapter"></button>
+        <button class="tp icon-btn" id="back30" title="Back 30 seconds"></button>
+        <button class="tp play icon-btn" id="playPause" title="Play or pause (space)"></button>
+        <button class="tp icon-btn" id="fwd30" title="Forward 30 seconds"></button>
+        <button class="tp icon-btn" id="nextCh" title="Next chapter"></button>
       </div>
 
       <div class="timeline" id="timeline">
@@ -93,6 +120,10 @@
             <div class="mark" id="bookMark" hidden></div>
             <div class="mark" id="playMark"></div>
           </div>
+          <!-- The ends of the track. Real elements on .track, not
+               pseudo-elements on .ticks: that box is inset by half the
+               thumb, so caps hung on it sat 5.5px short of the ends. -->
+          <i class="track-cap left"></i><i class="track-cap right"></i>
           <div class="ticks" id="ticks"></div>
           <!-- The squircle you drag, drawn by us rather than by the input.
                The native thumb cannot be lifted above the chapter marks
@@ -108,10 +139,6 @@
 
       <div class="tp-row more">
         <button class="tp icon-btn" id="btnBookmark" title="Save a bookmark to resume from later">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-               stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
-            <path d="M6.5 3.5 H17.5 V20.5 L12 15 L6.5 20.5 Z" />
-          </svg>
         </button>
         <button class="tp icon-btn note-btn" id="btnNoteHere" title="Add a note at this moment">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"

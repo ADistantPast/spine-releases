@@ -36,24 +36,73 @@ const short = sec => {
   const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
   return h ? `${h}:${String(m).padStart(2, "0")}` : `0:${String(m).padStart(2, "0")}`;
 };
-const TRASH_ICON =
-  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 6.5 H20 M9.5 6.5 V4.5 H14.5 V6.5" /><path d="M6.5 6.5 L7.5 20 H16.5 L17.5 6.5" /><path d="M10 10 V16.5 M14 10 V16.5" /></svg>';
-// The series button's empty state — same stroke weight and viewBox as every
-// other icon in the app, rather than the word "Series" doing double duty as
-// both a label and the only clue that clicking it does anything.
-const PLUS_ICON =
-  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5 V19 M5 12 H19" /></svg>';
 
-// Shown or hidden on the timeline. Line art at the same 24px viewBox and
-// stroke weight as every other icon here, rather than the emoji that was
-// standing in — an emoji renders as a full-colour glyph from the system font,
-// which is the one thing in this row that never matched the palette. The
-// hidden state gets its own struck-through eye rather than only being dimmer,
-// since "faint" and "off" are hard to tell apart at 13px.
+
+/* ---- the icon set ------------------------------------------------------
+ *
+ * One grid (24×24), one weight (1.6), round joins and round caps throughout,
+ * and a radius on every box shape rather than a mitred corner.
+ *
+ * Five of these did not exist as icons at all: the transport's |◀ ◀30 ▶ 30▶
+ * ▶| were Unicode geometric *characters*, rendered from whatever system font
+ * claimed them — which is exactly why they never matched anything else in the
+ * app, and why restyling could not have fixed it.
+ *
+ * They are constants because they are used in more than one place: the
+ * transport, the swipe-up tray, the drawers, and the phone's reading view.
+ */
 const EYE_ICON =
-  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 12 C6 7.2 18 7.2 21.4 12 C18 16.8 6 16.8 2.6 12 Z" /><circle cx="12" cy="12" r="2.5" /></svg>';
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M2.8 12C6.2 6.6 17.8 6.6 21.2 12 17.8 17.4 6.2 17.4 2.8 12Z"/><circle cx="12" cy="12" r="3.4"/></svg>';
 const EYE_OFF_ICON =
-  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 12 C6 7.2 18 7.2 21.4 12 C18 16.8 6 16.8 2.6 12 Z" /><circle cx="12" cy="12" r="2.5" /><path d="M4 20 L20 4" /></svg>';
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M2.8 12C6.2 6.6 17.8 6.6 21.2 12 17.8 17.4 6.2 17.4 2.8 12Z"/><circle cx="12" cy="12" r="3.4"/><path d="M4.6 19.4 19.4 4.6"/></svg>';
+const PLUS_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M12 5.5V18.5M5.5 12H18.5"/></svg>';
+const MINUS_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M6 12H18"/></svg>';
+const BOOKMARK_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M8.4 3.8h7.2a3 3 0 0 1 3 3v12.8a.7.7 0 0 1-1.13.55L12 15.6l-5.47 4.55A.7.7 0 0 1 5.4 19.6V6.8a3 3 0 0 1 3-3Z"/></svg>';
+const NOTE_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><rect x="4.4" y="3.6" width="15.2" height="16.8" rx="3.4"/><path d="M8.6 9.2h6.8M8.6 12.8h6.8M8.6 16.4h4.2"/></svg>';
+const POPOUT_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M14 4.5H19.5V10"/><path d="M19.4 4.6 13.2 10.8"/><path d="M19.5 14.5V17a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5V7a2.5 2.5 0 0 1 2.5-2.5H9.5"/></svg>';
+const POPIN_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M10 20H4.5V14.5"/><path d="M4.6 19.4 10.8 13.2"/><path d="M4.5 9.5V7a2.5 2.5 0 0 1 2.5-2.5H17a2.5 2.5 0 0 1 2.5 2.5V17a2.5 2.5 0 0 1-2.5 2.5H14.5"/></svg>';
+const PREV_CH_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M18.4 5.6a.7.7 0 0 0-1.12-.56l-8.5 6.4a.7.7 0 0 0 0 1.12l8.5 6.4a.7.7 0 0 0 1.12-.56Z"/><path d="M5.9 5.4v13.2"/></svg>';
+const NEXT_CH_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M5.6 5.6a.7.7 0 0 1 1.12-.56l8.5 6.4a.7.7 0 0 1 0 1.12l-8.5 6.4A.7.7 0 0 1 5.6 18.4Z"/><path d="M18.1 5.4v13.2"/></svg>';
+const PLAY_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M7.6 5.3a.7.7 0 0 1 1.06-.6l10 6.7a.7.7 0 0 1 0 1.2l-10 6.7a.7.7 0 0 1-1.06-.6Z"/></svg>';
+const PAUSE_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M9 5.4a1.5 1.5 0 0 1 1.5 1.5v10.2a1.5 1.5 0 0 1-3 0V6.9A1.5 1.5 0 0 1 9 5.4Z"/><path d="M15 5.4a1.5 1.5 0 0 1 1.5 1.5v10.2a1.5 1.5 0 0 1-3 0V6.9A1.5 1.5 0 0 1 15 5.4Z"/></svg>';
+const BACK30_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M11.4 5.2A6.9 6.9 0 1 1 5.1 12"/><path d="M11.6 2.4 8.4 5.3l3.2 2.9"/></svg>';
+const FWD30_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M12.6 5.2A6.9 6.9 0 1 0 18.9 12"/><path d="M12.4 2.4l3.2 2.9-3.2 2.9"/></svg>';
+const SUN_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="4.3"/><path d="M12 3.1v1.9M12 19v1.9M3.1 12h1.9M19 12h1.9M5.7 5.7l1.35 1.35M16.95 16.95 18.3 18.3M18.3 5.7 16.95 7.05M7.05 16.95 5.7 18.3"/></svg>';
+const MOON_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M20.77 13.76A8.3 8.3 0 0 1 10.29 3.28a8.3 8.3 0 1 0 10.49 10.49Z"/></svg>';
+const CLOSE_ICON =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6"/></svg>';
+
+
+/* ---- the transport's own icons -----------------------------------------
+ * Filled here rather than written into the markup, so each is drawn once and
+ * the three copies cannot drift. Play and pause swap in place, which is why
+ * syncPlayButton() sets innerHTML rather than textContent now — a glyph could
+ * be assigned as text, an icon cannot. */
+const TP_ICONS = { prevCh: PREV_CH_ICON, back30: BACK30_ICON,
+                   fwd30: FWD30_ICON, nextCh: NEXT_CH_ICON,
+                   /* The bookmark joined them once it was rounder and filled:
+                      it had a constant and an inline copy in the markup, and
+                      the inline copy was the one being drawn. */
+                   btnBookmark: BOOKMARK_ICON };
+for (const [id, svg] of Object.entries(TP_ICONS)) { const b = $(id); if (b) b.innerHTML = svg; }
+// and the theme switch's two glyphs, so the drawings live in one place only
+{ const sun = document.querySelector(".ico-sun"), moon = document.querySelector(".ico-moon");
+  if (sun) sun.innerHTML = SUN_ICON;
+  if (moon) moon.innerHTML = MOON_ICON; }
 
 const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
@@ -93,7 +142,7 @@ async function api(url, body) {
    differ from the phone copy (see the web reader notes in CLAUDE.md); the
    rest of this file has to stay the same in both. */
 $("btnImport").onclick = () => {
-  openDrawer("Add a book");
+  if (!openDrawer("Add a book")) return;
   /* The code goes first because it is the thing you came here to do — you
      have been read a code and you want to type it. Opening a file is the
      fallback, and the explanation belongs under both rather than wedged
@@ -831,6 +880,54 @@ function centreLyric(behavior) {
   box.scrollTo({ top, behavior: far ? "instant" : (behavior || "instant") });
 }
 
+/* ---- the segmented bar fits by measurement -----------------------------
+ * A seg label is nowrap and a flex item cannot shrink below its own text, so
+ * a narrow window did not squeeze this bar — the bar overran the padding it
+ * sits in and the window's edge cut the last segment in half.
+ *
+ * Two steps down, tried in order and chosen by measurement, exactly as
+ * fitTickLabels() does it: the labels' widths depend on the font, so asking
+ * the layout is the only honest test. 11px is the floor and it fits five
+ * words inside a Fold's cover screen.
+ */
+function segbarSpills() {
+  const bar = $("bar"), sb = $("segbar");
+  if (!bar || !sb || !sb.offsetParent) return false;       // hidden: nothing to fit
+  /* Asked of the segments themselves, one at a time. A seg-btn carries
+     min-width:0, which removes the min-content floor a flex item would
+     otherwise have — so a squeezed segment does not push the pill wider, it
+     keeps its box and lets the label hang out of it. That is the screenshot:
+     "Import" sitting on the pill's own rounded edge. */
+  for (const b of sb.querySelectorAll(".seg-btn"))
+    if (b.scrollWidth > b.clientWidth + 1) return true;
+  /* And the other half: the pill fits its labels but has grown into the bar's
+     padding, so it ends flush against the window instead of inset from it.
+
+     Deliberately not sb.scrollWidth or bar.scrollWidth. The indicator is
+     absolutely positioned and still carries the width and offset of the
+     segment it was last measured against, so after a step down it overhangs
+     the pill until paintSeg() runs again — measured as a phantom 82px of
+     overflow, which sent every width straight to the smallest step. */
+  const pad = parseFloat(getComputedStyle(bar).paddingRight) || 0;
+  return sb.getBoundingClientRect().right > bar.getBoundingClientRect().right - pad + 1;
+}
+
+function fitSegbar() {
+  const sb = $("segbar");
+  if (!sb) return;
+  sb.classList.remove("tight", "tighter");
+  if (segbarSpills()) {
+    sb.classList.add("tight");
+    if (segbarSpills()) sb.classList.replace("tight", "tighter");
+  }
+  /* The block is measured from a segment's width, so it is repainted here
+     rather than left to the resize listener — the two cannot then get into the
+     wrong order. Unconditionally, not only when a step changed: the segments
+     also shrink between the steps, and a stale block was measured 43px wide of
+     its segment at a width where no class had moved. */
+  if (sb.querySelector(".seg-btn.on")) paintSeg($("drawerTitle").textContent);
+}
+
 // the pop-out resizes the window underneath us, and the scroll offset that
 // centred the line at the old size is meaningless at the new one
 window.addEventListener("resize", () => {
@@ -840,6 +937,11 @@ window.addEventListener("resize", () => {
   // width, so it has to be re-asked whenever the window changes — on a
   // Fold that is every time the phone is opened or closed
   if (book) fitTickLabels();
+  snapTicks();
+  /* Before the indicator is re-measured: the segment widths are what it is
+     measured from, and paintSeg()'s own resize listener is registered after
+     this one. */
+  fitSegbar();
 });
 
 /* The on-screen keyboard covering whatever it opens over.
@@ -985,20 +1087,21 @@ function drawTicks() {
 
   const chapterHtml = shown.map((c, i) => {
     const pct = book.duration ? c.t / book.duration * 100 : 0;
-    return `<div class="tick${i % 2 ? " alt" : ""}" style="left:${pct}%" data-seek="${c.t}">
+    return `<div class="tick${i % 2 ? " alt" : ""}" style="left:${pct}%" data-pct="${pct}" data-seek="${c.t}">
               <span class="tick-n">${tickLabel(c.name)}</span></div>
-            <div class="tick-label">${esc(c.name)}</div>`;
+            <div class="tick-label" data-pct="${pct}">${esc(c.name)}</div>`;
   }).join("");
 
   const noteHtml = book.notes.map((n, k) => {
     if (hiddenNotes.has(n.s)) return "";
     const pct = book.duration ? n.s / book.duration * 100 : 0;
-    return `<div class="tick note" style="left:${pct}%" data-seek="${n.s}" data-note-k="${k}"></div>
-            <div class="tick-label">${esc(n.text)}</div>`;
+    return `<div class="tick note" style="left:${pct}%" data-pct="${pct}" data-seek="${n.s}" data-note-k="${k}"></div>
+            <div class="tick-label" data-pct="${pct}">${esc(n.text)}</div>`;
   }).join("");
 
   box.innerHTML = chapterHtml + noteHtml;
   fitTickLabels();
+  snapTicks();
   fitTickLabelsSoon();
   /* Clicking a mark takes the page to it. Browse, not seek: the timeline is
      the instrument for looking around, and jumping to a chapter to see what
@@ -1061,6 +1164,57 @@ const TICK_GAP_TIGHT = 4;
    spare — and one such pair was enough to drop every number in the book.
    Walking each row left to right and dropping only what overlaps costs one
    pass over labels already measured. */
+
+/* ---- ticks land on whole pixels ----------------------------------------
+ *
+ * Reported as the chapter lines being different widths. They are not: every
+ * one is declared 1px and measures 1px. What differs is where they start —
+ * a percentage of the track gives positions like 349.5, 376.359, 404.813, and
+ * a 1px box at a fractional x is antialiased across two device pixels. Half
+ * of them come out crisp and half come out as two half-lit pixels, which the
+ * eye reads as a thick line next to a thin one.
+ *
+ * So the left edge is snapped to a whole pixel. The usual translateX(-50%)
+ * has to go with it — on a 1px box that is another half pixel, which would
+ * put every line straight back where it started — so the half width is taken
+ * off the number instead, and only the vertical part of the transform stays.
+ *
+ * Re-run whenever the track's width changes, since the pixel a percentage
+ * lands on changes with it.
+ */
+function snapTicks() {
+  const box = $("ticks");
+  if (!box) return;
+  const r = box.getBoundingClientRect();
+  const w = box.clientWidth;
+  if (!w) return;
+  /* The container's own left edge is fractional — the track's half-thumb
+     inset lands on something like x.78 — so rounding *within* it just moves
+     every line to the same fraction of a pixel rather than onto one. Rounding
+     the sum puts them on real device pixels, which is the difference between
+     uniformly soft and actually crisp. */
+  const originFrac = r.left - Math.floor(r.left);
+  const snap = (want, half) => `${Math.round(want - half + originFrac) - originFrac}px`;
+  for (const t of box.querySelectorAll(".tick")) {
+    const pct = parseFloat(t.dataset.pct);
+    if (!Number.isFinite(pct)) continue;
+    t.style.left = snap(pct / 100 * w, t.offsetWidth / 2);
+  }
+  /* The hover label sits above the tick it names.
+     It used to be centred on the whole track — left:50% of .ticks — so the
+     name appeared in the middle of the bar however far along the mark was,
+     which reads as belonging to nothing. Clamped to the track's own width at
+     each end, or the first and last chapters' names hang off the edge. */
+  for (const lab of box.querySelectorAll(".tick-label")) {
+    const pct = parseFloat(lab.dataset.pct);
+    if (!Number.isFinite(pct)) continue;
+    const half = lab.offsetWidth / 2;
+    const want = Math.min(Math.max(pct / 100 * w, half), w - half);
+    lab.style.left = snap(want, half);
+  }
+  document.querySelector(".timeline")?.classList.add("snapped");
+}
+
 function fitTickLabels() {
   const tl = $("timeline");
   tl.classList.remove("stagger", "tight", "nonums");
@@ -1103,9 +1257,9 @@ function fitTickLabels() {
    fits — then the real face arrives and the numbers overlap. Re-check on the
    next frame and again once fonts report ready. */
 function fitTickLabelsSoon() {
-  requestAnimationFrame(() => { if (book) fitTickLabels(); });
+  requestAnimationFrame(() => { if (book) fitTickLabels(); snapTicks(); });
   if (document.fonts && document.fonts.ready)
-    document.fonts.ready.then(() => { if (book) fitTickLabels(); });
+    document.fonts.ready.then(() => { if (book) fitTickLabels(); snapTicks(); });
 }
 
 let mediaChapter = -1;
@@ -1541,7 +1695,8 @@ let wantPlaying = false;
 let reloading = false;
 
 function syncPlayButton() {
-  $("playPause").textContent = wantPlaying ? "❚❚" : "▶";
+  // innerHTML, not textContent: these are drawings now, not characters.
+  $("playPause").innerHTML = wantPlaying ? PAUSE_ICON : PLAY_ICON;
 }
 
 function startPlaying() {
@@ -2339,28 +2494,75 @@ function selectedWordRange() {
 
 const drawer = $("drawer"), scrim = $("scrim");
 function openDrawer(title) {
+  /* Pressing the segment you are already on closes it. The drawer no longer
+     dims the page, so it can sit open while you read — which makes "press it
+     again to put it away" the obvious gesture, and there is nothing else to
+     hit now the scrim has gone. */
+  if (drawer.classList.contains("open") && $("drawerTitle").textContent === title) {
+    closeDrawer();
+    return false;
+  }
+  measureBar();           // the drawer's top is read from it, now
   $("drawerTitle").textContent = title;
+  paintSeg(title);
   $("drawerBody").classList.remove("lib");
   drawer.classList.add("open");
-  scrim.classList.add("open");
+  /* No scrim. It dimmed the page and — the part that actually mattered —
+     took every pointer event over it, so with the drawer open the segments
+     that opened it were dead: you could not move from Chapters to Notes
+     without shutting it first. The panel floats instead, and closing on a
+     click outside is done by asking where the click landed. */
+  return true;
 }
-function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("open"); }
+
+/* Outside the panel closes it — but the bar does not count as outside.
+   Pressing another segment has to switch drawers rather than shut the one you
+   are in, which was the whole reason for taking the scrim away. Also skipped
+   while a drag is carrying a book about, since a drop lands wherever it
+   lands. */
+document.addEventListener("pointerdown", e => {
+  if (!drawer.classList.contains("open")) return;
+  if (e.target.closest(".drawer, .bar, .status-menu, .note-pop, #dropveil")) return;
+  closeDrawer();
+}, true);
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && drawer.classList.contains("open")) closeDrawer();
+});
+function closeDrawer() {
+  drawer.classList.remove("open");
+  scrim.classList.remove("open");   // nothing opens it now; belt and braces
+  paintSeg(null);          // nowhere selected once the drawer is shut
+}
 $("drawerClose").onclick = closeDrawer;
 scrim.onclick = closeDrawer;
 
 $("btnChapters").onclick = () => openChapters();
 
+const CHAPTER_EYE = false;   // see the note in the row builder below
+
 function openChapters(focusT) {
   if (!book) return toast("Import a book first.");
-  openDrawer("Chapters");
+  if (!openDrawer("Chapters")) return;
   const body = $("drawerBody");
   body.innerHTML =
     `<p class="hint">Rename anything, delete what is wrong, and use <b>Mark here</b>
       in the player to add your own. Chapters are detected on the computer,
       before export — reopen there if you want different ones.</p>` +
     book.chapters.map((c, k) => {
+      /* No eye on a chapter row. The owner's call, and the argument is that a
+         chapter you do not want on the timeline is a chapter you delete — so
+         the control was spending the row's first slot on a second way of
+         saying the same thing, and pushing the timecode in from the edge.
+
+         Everything behind it is left alone: hiddenChapters, the [data-eye]
+         handler, drawTicks()'s filter and .row-eye are all still here, so this
+         is one flag to put back. Nothing is stranded invisible in the
+         meantime — hiddenChapters is per-session and reset by loadBook(), so
+         with nothing to add to it, it stays empty. The Notes drawer keeps its
+         own eye, where hiding is not the same as deleting the note. */
       const onTimeline = !/^(start|end)$/i.test(c.name);
-      const eye = onTimeline
+      const eye = CHAPTER_EYE && onTimeline
         ? `<button class="row-eye${hiddenChapters.has(c.t) ? " off" : ""}"
              data-eye="${c.t}" title="Show or hide this on the timeline">${hiddenChapters.has(c.t) ? EYE_OFF_ICON : EYE_ICON}</button>`
         : "";
@@ -2419,7 +2621,7 @@ $("btnNotes").onclick = () => openNotes();
 
 function openNotes() {
   if (!book) return toast("Import a book first.");
-  openDrawer("Notes");
+  if (!openDrawer("Notes")) return;
   const body = $("drawerBody");
   if (!book.notes.length) {
     body.innerHTML = `<p class="hint">Nothing marked yet. Select text in the reader
@@ -2547,11 +2749,13 @@ function statusBtnHtml(b) {
 function libRowHtml(b) {
   return `
       <div class="row stack lib-row" data-open="${b.id}">
+        <span class="grip" title="Drag to reorder" aria-hidden="true"
+              ><span></span><span></span><span></span
+              ><span></span><span></span><span></span></span>
         <span class="row-sub">${clock(b.position)} of ${clock(b.duration)} ·
           ${b.chapters} chapters${b.missing ? " · audio missing" : ""}</span>
         <div class="lib-head">
           <span class="row-n">${esc(b.title)}</span>
-          <button class="row-go trash icon-btn" data-del-book="${b.id}" title="Remove from the library">${TRASH_ICON}</button>
         </div>
         <div class="lib-actions">
           ${statusBtnHtml(b)}
@@ -2559,9 +2763,14 @@ function libRowHtml(b) {
           ${b.bookmark != null
             ? `<button class="row-go" data-open-at="${b.id}|bookmark">Bookmark · ${clock(b.bookmark)}</button>`
             : ""}
-          <button class="row-go series-btn${b.series ? "" : " series-btn-empty"}" data-series="${b.id}"
-                  title="Group this book into a series">${b.series ? esc(b.series) : PLUS_ICON}</button>
         </div>
+        <!-- Out of the button row and into the corner. The row had run out of
+             width — the series field was already having to float over its
+             neighbours to fit — and forgetting a book is not something to
+             keep beside the things you press often. Still two presses: this
+             one arms, the next confirms. -->
+        <button class="row-drop icon-btn" data-del-book="${b.id}"
+                title="Remove from the library">${MINUS_ICON}</button>
       </div>`;
 }
 
@@ -3144,7 +3353,7 @@ function wireLibrary() {
         clearTimeout(btn._t);
         btn._t = setTimeout(() => {
           btn.dataset.armed = "";
-          btn.innerHTML = TRASH_ICON;
+          btn.innerHTML = MINUS_ICON;
           btn.classList.remove("danger");
         }, 4000);
         return;
@@ -3190,7 +3399,7 @@ $("drawerBody").addEventListener("click", e => {
 }, true);
 
 $("btnLibrary").onclick = async () => {
-  openDrawer("Library");
+  if (!openDrawer("Library")) return;
   // openDrawer only shows the panel — it doesn't touch drawerBody, so without
   // this the previous drawer's content (Chapters, Notes, or a stale Library
   // list) stays on screen for the length of this fetch.
@@ -3311,6 +3520,7 @@ $("title").ondblclick = () => {
 };
 $("title").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } };
 $("title").onblur = async e => {
+  if (cancellingTitle) return;     // three clicks backing out of the rename
   e.target.contentEditable = "false";
   const t = e.target.textContent.trim();
   if (book && t && t !== book.title) {
@@ -3369,12 +3579,34 @@ document.addEventListener("keydown", e => {
    system installer, which asks you itself. Android relaunches the app once
    you confirm, so there is no restart step to build on that side. */
 (async () => {
-  await new Promise(r => setTimeout(r, 2500));
-  let u;
-  try { u = await api("/api/update"); } catch (e) { return; }
-  if (!u || u.state !== "available") return;
-  if (sessionStorage.getItem("spine.skipUpdate") === u.version) return;
-  offerUpdate(u);
+  /* Ask until there is an answer, not once and never again.
+   *
+   * The check runs on the other side in a daemon thread, over the network,
+   * with a twelve second timeout — so at 2.5s it is routinely still in
+   * flight and the state is the "idle" it started as. Reading once meant
+   * that whole session went by with no banner, however long the app then
+   * stayed open.
+   *
+   * Caught on a real install rather than reasoned about: the backend was
+   * reporting state "available" and version 1.0.42 while the page showed
+   * nothing at all, on a machine that had been sitting on 1.0.40 for a day
+   * being told it was up to date. Reported exactly that way — "it won't
+   * update" — and it was never the updater, only this.
+   *
+   * Every settled state ends it. Only "idle" — the check has not finished —
+   * is worth asking again about. */
+  for (let i = 0; i < 12 && !document.hidden; i++) {
+    await new Promise(r => setTimeout(r, i ? 2000 : 2500));
+    let u;
+    try { u = await api("/api/update"); } catch (e) { return; }
+    if (!u) return;
+    if (u.state === "available") {
+      if (sessionStorage.getItem("spine.skipUpdate") === u.version) return;
+      offerUpdate(u);
+      return;
+    }
+    if (u.state && u.state !== "idle") return;   // current, or offline
+  }
 })();
 
 /* Put the banner up for a release we know about. Split out so the automatic
@@ -3575,15 +3807,17 @@ function syncPopHtml() {
     </div>`;
 
   return `
-    <p class="hint">This device is called</p>
-    <input id="syncDevice" value="${esc(s.device || "")}" placeholder="Desktop"
+    <!-- The label went into the field. "This device is called" sat above an
+         empty box saying the same thing the placeholder can say, and it was
+         the first line of the panel — so the panel opened with a sentence
+         instead of the thing you came to use. -->
+    <input id="syncDevice" value="${esc(s.device || "")}"
+           placeholder="What to call this device"
            maxlength="40" spellcheck="false">
     <p class="sync-when">${syncWhenLine(s)}</p>
     ${s.lost ? "" : `<p class="sync-count">${syncCountLine(s)}</p>`}
     ${s.lost
-      ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>
-         <p class="hint">Your positions are kept here and carry over. The other
-           devices will need the new code.</p>`
+      ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>`
       : `<div class="sync-row">
            <button class="btn" id="syncGo">Sync now</button>
            <button class="btn ghost" id="syncForget">Forget</button>
@@ -3594,8 +3828,12 @@ function syncPopHtml() {
                   spellcheck="false" autocomplete="off">
            <div class="sync-row"><button class="btn" id="syncJoinGo">Join</button></div>
          </div>`}
-    <p class="hint">Your code</p>
-    <p class="sync-code">${esc(s.code)}</p>
+    <!-- "Your code" and the code are one thing, so they sit tight together
+         and the group they form keeps its distance from the buttons above. -->
+    <div class="sync-yours">
+      <p class="hint">Your code</p>
+      <p class="sync-code">${esc(s.code)}</p>
+    </div>
     <div id="syncPairs"></div>`;
 }
 
@@ -4022,4 +4260,211 @@ async function localSync(path, body) {
              pulledIds, others: s.others, unmatched };
   }
   return { error: "No such sync route." };
+}
+
+
+/* Nothing native to tell: Android tints its own bars from the WebView, and a
+   browser has no caption of ours to paint. */
+const THEME_TELL = () => {};
+
+/* ------------------------------------------------------------- theme
+ *
+ * index.html has already set data-theme before the first paint, from your
+ * saved choice or from what the system asks for. This is only the switch and
+ * the listener.
+ *
+ * The preference lives in localStorage, per device, on purpose — the same
+ * reasoning as the folded-series set and the shelf order. Which way round you
+ * like reading at 2am on a phone has nothing to do with a desktop, and it
+ * must never travel inside a .spinebook.
+ *
+ * Absent from storage means "follow the system", and that stays live: change
+ * Windows or Android to light while Spine is open and the page follows. Once
+ * you press the button you have made a choice, and the system stops getting
+ * a vote until you clear it.
+ */
+const THEME_KEY = "spine.theme";
+const osTheme = () =>
+  matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+const currentTheme = () =>
+  document.documentElement.getAttribute("data-theme") || osTheme();
+
+function applyTheme(t, tellBackend) {
+  document.documentElement.setAttribute("data-theme", t);
+  const b = $("btnTheme");
+  if (b) b.title = t === "light" ? "Switch to dark" : "Switch to light";
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content",
+    getComputedStyle(document.documentElement).getPropertyValue("--field-2").trim());
+  THEME_TELL(t, tellBackend);
+}
+
+$("btnTheme").onclick = () => {
+  const next = currentTheme() === "light" ? "dark" : "light";
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  applyTheme(next, true);
+};
+
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+  let chosen = null;
+  try { chosen = localStorage.getItem(THEME_KEY); } catch (e) {}
+  if (!chosen) applyTheme(osTheme(), true);
+});
+
+applyTheme(currentTheme(), true);
+
+/* ------------------------------------------------- the segmented bar
+ *
+ * Which of the five places you are in. openDrawer() already knows the title
+ * it is opening, and closeDrawer() already knows you have left, so this
+ * hangs off those two rather than off each button — one place to be right
+ * instead of five.
+ *
+ * The indicator is measured, never calculated: offsetLeft and offsetWidth of
+ * the live segment. A count-and-divide would be wrong the moment one label
+ * is wider than another, which is every real font.
+ */
+const SEG_FOR = { Library: "btnLibrary", Chapters: "btnChapters", Notes: "btnNotes",
+                  Export: "btnExport", "Add a book": "btnImport" };
+
+function paintSeg(title) {
+  const bar = $("segbar"), ind = $("segInd");
+  if (!bar) return;
+  const wantId = SEG_FOR[title] || null;
+  let active = null;
+  for (const b of bar.querySelectorAll(".seg-btn")) {
+    const on = b.id === wantId;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+    if (on) active = b;
+  }
+  if (!ind) return;
+  if (!active) { bar.classList.remove("ready"); return; }
+  /* The phone stacks the bar and hides the indicator; measuring it there
+     would be arithmetic nobody looks at. */
+  if (getComputedStyle(ind).display === "none") return;
+  /* No border correction. offsetLeft is measured from the offsetParent's
+     padding box, and an absolutely-positioned left:0 resolves against the
+     same box — subtracting the border put the block a pixel left of every
+     segment, which is small and visible when the thing is a filled slab
+     directly behind a word. Measured at -0.70 to -1.47px before, ~0 after. */
+  ind.style.width = `${active.offsetWidth}px`;
+  ind.style.transform = `translateX(${active.offsetLeft}px)`;
+  bar.classList.add("ready");
+}
+
+// a label's width moves with the window, so the block has to be re-measured
+window.addEventListener("resize", () => {
+  const on = $("segbar") && $("segbar").querySelector(".seg-btn.on");
+  if (on) paintSeg($("drawerTitle").textContent);
+});
+
+/* ---- two measured heights ----------------------------------------------
+ * The theme switch is a circle the same size as the segmented bar, and the
+ * drawer starts just below the bar. Both are written as custom properties
+ * from the real boxes rather than typed as numbers, so they stay right when
+ * the type, the padding or the wrapped phone layout changes them.
+ */
+function measureBar() {
+  const bar = $("bar"), seg = $("segbar");
+  if (bar) document.documentElement.style.setProperty(
+    "--bar-h", `${Math.round(bar.getBoundingClientRect().height)}px`);
+  if (seg) document.documentElement.style.setProperty(
+    "--seg-h", `${Math.round(seg.getBoundingClientRect().height)}px`);
+}
+/* A ResizeObserver alone is not enough, and this is a lesson already in the
+   file: it only reports during the rendering steps, which a window that is
+   not being drawn does not always run — positionJump() hit exactly this and
+   had to say so explicitly too. Left in as the cheap continuous case, with
+   the moments that actually matter named outright.
+
+   Measured wrong once because of it: --bar-h sat at 255px against an 85px
+   bar, taken while the bar was still three wrapped rows waiting for Poppins,
+   and the drawer opened 180px below where it should have. */
+if (window.ResizeObserver && $("bar")) new ResizeObserver(measureBar).observe($("bar"));
+window.addEventListener("resize", measureBar);
+if (document.fonts && document.fonts.ready)
+  document.fonts.ready.then(() => { measureBar(); fitSegbar(); });
+measureBar();
+fitSegbar();
+
+/* ------------------------------------------------- reading mode
+ *
+ * The book and nothing else: no bar, no transport. Three fingers anywhere on
+ * a touchscreen, or three clicks on the title with a mouse.
+ *
+ * The title already renames on double-click, so the third click has to undo
+ * that — it arrives *after* dblclick has put the heading into edit. Backing
+ * out has to skip the save too, or leaving reading mode would write whatever
+ * the heading happened to contain.
+ */
+let readingHintTimer = null;
+function readingHint(msg) {
+  let el = document.querySelector(".reading-hint");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "reading-hint";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(readingHintTimer);
+  readingHintTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function toggleReading(on) {
+  const app = $("app");
+  const want = on === undefined ? !app.classList.contains("reading") : !!on;
+  app.classList.toggle("reading", want);
+  if (want) readingHint(matchMedia("(pointer:coarse)").matches
+    ? "Reading mode — three fingers to come back"
+    : "Reading mode — three clicks in the margin to come back");
+  // the bar and the transport were measured for their own heights; both are
+  // gone or back, so anything keyed to them has to be re-asked
+  measureBar();
+  positionJump();
+  if (book) { fitTickLabels(); snapTicks(); }
+}
+
+let titleClicks = 0, titleClickTimer = null, cancellingTitle = false;
+$("title").addEventListener("click", () => {
+  titleClicks++;
+  clearTimeout(titleClickTimer);
+  titleClickTimer = setTimeout(() => { titleClicks = 0; }, 650);
+  if (titleClicks < 3) return;
+  titleClicks = 0;
+  const h = $("title");
+  if (h.isContentEditable) {
+    // dblclick opened the rename on the way here; close it without saving
+    cancellingTitle = true;
+    h.contentEditable = "false";
+    h.textContent = book ? book.title : "Spine";
+    document.getSelection().removeAllRanges();
+    cancellingTitle = false;
+  }
+  toggleReading();
+});
+
+/* Three fingers, anywhere. Not on a second finger and not on four: three is
+   deliberate enough that nothing else in the app claims it, and the reading
+   view has a two-finger pinch and a one-finger scroll already. */
+addEventListener("touchstart", e => {
+  if (e.touches.length === 3) toggleReading();
+}, { passive: true });
+
+/* And the way back out with a mouse, which was missing outright: three clicks
+   on the title cannot be it, because reading mode hides the bar and the title
+   with it. The margins either side of the column are the one part of a
+   reading page that is deliberately empty, so three clicks there bring the
+   interface back — e.detail is the click count, so no timer of our own.
+
+   Only the reader itself and the column's own empty space. A triple-click on
+   a paragraph is a text selection, and a selection here opens a note. */
+{ const r = $("reader");
+  if (r) r.addEventListener("click", e => {
+    if (!$("app").classList.contains("reading")) return;
+    if (e.detail !== 3) return;
+    if (e.target !== r && !e.target.classList.contains("page")) return;
+    toggleReading(false);
+  });
 }
