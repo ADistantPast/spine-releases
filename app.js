@@ -3823,11 +3823,16 @@ function syncPopHtml() {
     ${s.lost ? "" : `<p class="sync-count">${syncCountLine(s)}</p>`}
     ${s.lost
       ? `<div class="sync-row"><button class="btn" id="syncRebuild">Start a new record</button></div>`
-      : `<div class="sync-row">
+      : `<div class="sync-row two">
            <button class="btn" id="syncGo">Sync now</button>
            <button class="btn ghost" id="syncForget">Forget</button>
-           <button class="btn ghost" id="syncJoinBtn">Another code</button>
          </div>
+         <!-- No "Another code". Forget already gets you out, and the empty
+              state it drops you into is where joining belongs — so the third
+              button earned nothing and broke the row: three of them needed
+              272.4px in 272, which is why the last one sat on the panel's
+              edge. Two fit, and can be big enough to hit. The box below stays,
+              because pasting a code into the name field still opens it. -->
          <div id="syncJoinBox" hidden>
            <input id="syncJoinCode" placeholder="0000-0000-0000-0000-0000-0000-00"
                   spellcheck="false" autocomplete="off">
@@ -3853,11 +3858,17 @@ function openSyncPop() {
     if (r.error) return toast(r.error);
     await refreshSync(); openSyncPop();
   });
-  $("syncJoinBtn")?.addEventListener("click", () => { $("syncJoinBox").hidden = false; });
+
   $("syncJoinGo")?.addEventListener("click", async () => {
     const r = await syncApi("/api/sync/join", { code: $("syncJoinCode").value });
     if (r.error) return toast(r.error);
     await refreshSync(); openSyncPop();
+    /* Say so. Joining turned the panel from an invitation into a status line
+       and nothing else happened on screen, so a join that worked looked no
+       different from one that had not. */
+    const n = (syncInfo && syncInfo.shared) || 0;
+    toast(n ? `Joined — ${n} book${n > 1 ? "s" : ""} shared with your other devices.`
+            : "Joined. Press Sync now to send this device's places.");
   });
   $("syncDevice")?.addEventListener("change", e => {
     const v = e.target.value.trim();
@@ -3914,7 +3925,11 @@ async function runSync() {
   if (book && (r.pulledIds || []).indexOf(book.id) >= 0) {
     if (theirsAt != null) playFrom(theirsAt);
     closeSyncPop();
-    toast(`Caught up to ${theirsBy || "your other device"}.`);
+    /* Name the place, not just the device: there was no way to tell a snap
+       that happened from one that silently did not. */
+    toast(theirsAt != null
+      ? `Moved to ${clock(theirsAt)} — where ${theirsBy || "your other device"} left off.`
+      : `Caught up to ${theirsBy || "your other device"}.`);
     return renderPairs(r.unmatched || []);
   }
   const n = (r.pulled || []).length;

@@ -2187,3 +2187,49 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * layout already sets, and font-size is the only property that is safe. */
 .segbar.tight .seg-btn{font-size:12px}
 .segbar.tighter .seg-btn{font-size:11px;letter-spacing:0}
+
+/* ---- the play glyph scales with its button ------------------------------
+ * The transport icons are filled in from constants that carry width="14",
+ * which is right in a 34px-tall desktop button and small in the phone's
+ * 68x46 one — the triangle sat in the middle of a lot of blue. CSS beats a
+ * presentation attribute, so the size is stated here rather than by having
+ * two copies of the glyph. */
+@media (max-width:820px), (pointer: coarse) {
+  #playPause svg{width:24px;height:24px}
+}
+
+/* ---- the sync panel, brought up to the 1.1.0 shapes ---------------------
+ * The panel's rhythm was reworked for 1.1.0 — the label became a placeholder,
+ * the explanation went — but the field itself was missed, and three buttons
+ * have never fitted the row. Measured on the running panel: 5px corners
+ * against a scale of 11, --field where every other field in a panel is
+ * --panel-2, the mono face on a box you type a device's name into, and
+ * 272.4px of buttons in 272px of space, which is why the last one sits on the
+ * edge rather than inside it. */
+.sync-pop input{
+  border-radius:var(--r-md);
+  background:var(--panel-2);
+  font-family:var(--ui);
+}
+/* Except the one you paste a code into. That is characters to be told apart
+   one at a time, which is the whole reason --data exists. */
+.sync-pop #syncJoinBox input{font-family:var(--data)}
+
+/* Wrapping, not shrinking. Three buttons in 272px is borderline at this font
+   and would break again the moment a label changed; a wrapped third button
+   reads as deliberate where a clipped one reads as broken. */
+.sync-pop .sync-row{flex-wrap:wrap;row-gap:6px}
+
+/* Air between the field and what the panel is telling you. They were touching
+   in 1.1.1 — the field has no margin below it and nothing else was supplying
+   one. 14px, the same gap the button row carries above and below, so the panel
+   has one rhythm rather than three: 6px inside a group, 14 between. */
+.sync-pop .sync-when{margin-top:14px}
+
+/* ---- two buttons, not three ---------------------------------------------
+ * Another code is gone: Forget already leaves the record, and the empty state
+ * it drops you into is where joining lives. Three buttons wanted 272.4px in a
+ * 272px row, which is why the last one sat on the panel's edge; two share the
+ * row and get big enough to be worth hitting. */
+.sync-pop .sync-row.two{flex-wrap:nowrap}
+.sync-pop .sync-row.two .btn{flex:1 1 0;padding:9px 10px;font-size:12px}
