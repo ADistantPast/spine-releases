@@ -3829,7 +3829,7 @@ function syncPopHtml() {
   if (!s.code) return `
     <p class="hint">Keep your place in step across your devices. One code,
       shared between them; nothing is sent until you press this.</p>
-    <div class="sync-row">
+    <div class="sync-row two">
       <button class="btn" id="syncNew">Start a code</button>
       <button class="btn ghost" id="syncJoinBtn">I have one</button>
     </div>
@@ -3885,6 +3885,15 @@ function openSyncPop() {
     const r = await syncApi("/api/sync/new", {});
     if (r.error) return toast(r.error);
     await refreshSync(); openSyncPop();
+  });
+
+  // "I have one" had no listener at all, in any of the three copies, since
+  // the empty state was written: the panel drew the button and clicking it
+  // did nothing. So joining a code was impossible except by pasting it into
+  // the device-name field and taking the offer that makes.
+  $("syncJoinBtn")?.addEventListener("click", () => {
+    $("syncJoinBox").hidden = false;
+    $("syncJoinCode").focus();
   });
 
   $("syncJoinGo")?.addEventListener("click", async () => {
