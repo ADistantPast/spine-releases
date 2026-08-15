@@ -373,15 +373,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   text-shadow:0 0 6px rgba(var(--accent-rgb),.45), 0 0 16px rgba(var(--accent-rgb),.25), 0 0 28px rgba(var(--accent-rgb),.1);
 }
 .w.hit{background:rgba(var(--chapter-rgb),.28);opacity:1}
-/* The word another device had reached. Green, and deliberately not the
-   green a note uses — a note is a background across a run of words, this is
-   one word underlined, so the two cannot be read for each other. It also
-   has to lose to .w.now: when the playhead arrives at it, the playhead is
+/* The word another device had reached. It carried a 2px rule under it and
+   that read as heavier than a position marker deserves — the first thing
+   noticed once sync worked well enough to see it.
+
+   It still cannot be read as a note, because the two use different channels
+   rather than different decoration: a note tints the *background* behind
+   ordinary text, this colours the *glyphs* and leaves the background alone.
+   Same green, opposite surfaces. Don't give this one a background.
+
+   It also has to lose to .w.now: when the playhead arrives, the playhead is
    what you are looking at. */
-.w.theirs{
-  color:var(--note);opacity:1;
-  box-shadow:inset 0 -2px 0 0 rgba(var(--note-rgb),.75);
-}
+.w.theirs{color:var(--note);opacity:1}
 /* The highlight should sit around the words evenly.
 
    Two things stop that happening on their own. Vertically, an inline
