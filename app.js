@@ -3881,7 +3881,7 @@ function syncPopHtml() {
          empty box saying the same thing the placeholder can say, and it was
          the first line of the panel — so the panel opened with a sentence
          instead of the thing you came to use. -->
-    <input id="syncDevice" value="${esc(s.device || "")}"
+    <input id="syncDevice" value="${esc(s.device || rememberedName())}"
            placeholder="What to call this device"
            maxlength="40" spellcheck="false">
     <p class="sync-when">${syncWhenLine(s)}</p>
@@ -3971,10 +3971,15 @@ function openSyncPop() {
       $("syncJoinCode").value = v;
       return toast("That looks like a sync code — press Join to use it.");
     }
-    syncApi("/api/sync/name", { name: v });
+    saveDeviceName(v);   // backend and this device's own memory
   });
   $("syncForget")?.addEventListener("click", async () => {
-    await syncApi("/api/sync/forget", {}); await refreshSync(); closeSyncPop();
+    await syncApi("/api/sync/forget", {});
+    /* Forget deletes the whole state file, the chosen name with it. The name
+       is this device's, not the record's, so it is put straight back. */
+    const keep = rememberedName();
+    if (keep) await syncApi("/api/sync/name", { name: keep });
+    await refreshSync(); closeSyncPop();
   });
   $("syncRebuild")?.addEventListener("click", async () => {
     const r = await syncApi("/api/sync/rebuild", {});
@@ -4061,7 +4066,35 @@ function renderPairs(list) {
   });
 }
 
-const closeSyncPop = () => { const p = $("syncPop"); if (p) p.hidden = true; };
+/* Committing the name on the way out is not belt and braces. The field
+   saves on `change`, which fires on blur — and dismissing the panel removes
+   the input from the document, so the blur never lands and the name you
+   just typed is thrown away. Reported as not being able to choose a name at
+   all. */
+const closeSyncPop = () => {
+  commitDeviceName();
+  const p = $("syncPop"); if (p) p.hidden = true;
+};
+
+/* The chosen name outlives the record. Forget deletes sync.json, name and
+   all, so getting out and back in used to cost you the name every time —
+   and the whole point of choosing one is that it is yours. localStorage is
+   the right home: it is per device, which is exactly what this is. */
+const NAME_KEY = "spine.deviceName";
+const rememberedName = () => { try { return localStorage.getItem(NAME_KEY) || ""; } catch (e) { return ""; } };
+
+function saveDeviceName(v) {
+  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch (e) {}
+  syncApi("/api/sync/name", { name: v });
+}
+
+function commitDeviceName() {
+  const el = $("syncDevice");
+  if (!el || !document.contains(el)) return;
+  const v = el.value.trim();
+  if (v === (syncInfo.device || "")) return;   // nothing typed
+  saveDeviceName(v);
+}
 
 /* One press: the panel opens on what is already known, and the sync it
    promises starts behind it.
@@ -4078,7 +4111,6 @@ $("syncDot").onclick = e => {
   refreshSync().then(() => {
     if ($("syncPop").hidden) return;
     paintSync();                     // the fresh reading, without a rebuild
-    if (syncInfo.code && !syncInfo.lost) runSync();
   });
 };
 // anywhere else dismisses it, which is the whole of its dismiss behaviour
