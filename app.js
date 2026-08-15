@@ -3649,7 +3649,13 @@ document.addEventListener("visibilitychange", async () => {
 function offerUpdate(u) {
   const small = !!u.canPatch;
   $("updateTitle").textContent = `Spine ${u.version} is available`;
-  $("updateNotes").textContent = (u.notes || []).join(" · ");
+  /* notes is a STRING in every manifest ever published, and this said
+     .join on it — a TypeError thrown three lines before the panel is
+     unhidden, from a call the poll does not wrap in try. So the banner
+     never appeared, for any release, on any build, and failed silently
+     every time. Reported as "the updater has never worked". */
+  $("updateNotes").textContent =
+    Array.isArray(u.notes) ? u.notes.join(" · ") : (u.notes || "");
   $("updateGo").textContent = "Update";
   $("update").hidden = false;
 
