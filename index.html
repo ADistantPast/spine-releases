@@ -127,6 +127,9 @@
                sit under the thumb (see .marks z-index) so dragging never
                hides behind them. -->
           <div class="marks">
+            <!-- Where the other device left off. First of the three, so the
+                 bookmark and the play position paint over it. -->
+            <div class="mark" id="theirMark" hidden></div>
             <div class="mark" id="bookMark" hidden></div>
             <div class="mark" id="playMark"></div>
           </div>

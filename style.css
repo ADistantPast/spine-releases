@@ -659,6 +659,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
    edge or it reads as a lump in the line. */
 #playMark{background:var(--accent);box-shadow:0 0 0 1.5px var(--field)}
 #bookMark{background:var(--flag);box-shadow:0 0 0 1.5px var(--field)}
+/* The other device, in the note green it already wears in the page. The
+   scrub bar is the only view of the whole book, so without this there
+   was no way to see that they are somewhere else — let alone find it. */
+#theirMark{background:var(--note);box-shadow:0 0 0 1.5px var(--field)}
 
 .ticks{position:absolute;top:0;bottom:0;left:5.5px;right:5.5px;pointer-events:none}
 .tick{

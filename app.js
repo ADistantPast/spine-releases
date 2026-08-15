@@ -3775,6 +3775,7 @@ async function refreshSync() {
 
    theirsAt is in seconds, and survives a re-render because renderBook()
    throws every span away: the mark is re-applied rather than remembered. */
+const SAME_PLACE = 10;   // seconds; see noteTheirPlace
 let theirsAt = null, theirsBy = "";
 
 function theirSlot() {
@@ -3788,10 +3789,38 @@ function noteTheirPlace(others) {
   const e = slot && others ? others[slot] : null;
   theirsAt = e ? +(e.pos || 0) : null;
   theirsBy = e ? (e.by || "") : "";
+  /* Two devices in the same place is the ordinary state after a sync, and
+     there is nothing to point at then: a mark sitting under the playhead
+     reads as clutter, and "Go there" offering the spot you are already on
+     reads as broken. SAME_PLACE is generous on purpose — a few seconds of
+     drift between two devices is agreement, not a difference worth a
+     control. */
+  if (theirsAt != null && book &&
+      Math.abs(theirsAt - (+book.position || 0)) < SAME_PLACE) {
+    theirsAt = null;
+    theirsBy = "";
+  }
   markTheirs();
 }
 
+/* Where the other device is, on the scrub track.
+
+   The green word only helps if you happen to be looking at that part of the
+   book. The track is the only view of the whole thing, so without this there
+   was no way to see that they are somewhere else, let alone reach it. Left
+   non-interactive like the other two marks — the sync panel's "Go there" is
+   the control, and a 6px target would not be one. */
+function updateTheirMark() {
+  const m = $("theirMark");
+  if (!m) return;
+  const dur = book && book.duration;
+  const show = theirsAt != null && !!dur;
+  m.hidden = !show;
+  if (show) m.style.left = `${Math.max(0, Math.min(100, theirsAt / dur * 100))}%`;
+}
+
 function markTheirs() {
+  updateTheirMark();
   document.querySelectorAll(".w.theirs").forEach(w => w.classList.remove("theirs"));
   if (theirsAt == null || !book || compact) return;
   const i = wordAt(theirsAt);
@@ -3817,7 +3846,9 @@ function syncCountLine(s) {
 /* Which panel this is, rather than what it says: a code appearing or the
    record going missing changes the shape and needs a real redraw. Anything
    else is two lines of text. */
-const syncShape = s => `${!!s.code}|${!!s.lost}`;
+/* theirsAt is in the shape because the "Go there" row appears and
+   disappears with it, and paintSync only redraws on a shape change. */
+const syncShape = s => `${!!s.code}|${!!s.lost}|${theirsAt != null}`;
 let syncDrawn = "";
 
 function paintSync() {
@@ -3874,6 +3905,9 @@ function syncPopHtml() {
          </div>`}
     <!-- "Your code" and the code are one thing, so they sit tight together
          and the group they form keeps its distance from the buttons above. -->
+    ${theirsAt != null ? `
+    <p class="sync-count">${esc(theirsBy || "Your other device")} is at ${clock(theirsAt)}</p>
+    <div class="sync-row"><button class="btn ghost" id="syncGoThere">Go there</button></div>` : ""}
     <div class="sync-yours">
       <p class="hint">Your code</p>
       <p class="sync-code">${esc(s.code)}</p>
@@ -3897,6 +3931,18 @@ function openSyncPop() {
   // the empty state was written: the panel drew the button and clicking it
   // did nothing. So joining a code was impossible except by pasting it into
   // the device-name field and taking the offer that makes.
+  /* Getting to their place had no deliberate control. A sync that pulled
+     snapped you there, but when your own position is further on the merge
+     correctly refuses to pull — so nothing moved, and the only way across
+     was to find a single green word that could be hours off-screen. */
+  $("syncGoThere")?.addEventListener("click", () => {
+    if (theirsAt == null) return;
+    const at = theirsAt;
+    playFrom(at);
+    closeSyncPop();
+    toast(`Moved to ${clock(at)} — where ${theirsBy || "your other device"} left off.`);
+  });
+
   $("syncJoinBtn")?.addEventListener("click", () => {
     $("syncJoinBox").hidden = false;
     $("syncJoinCode").focus();
