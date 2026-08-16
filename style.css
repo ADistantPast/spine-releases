@@ -1640,8 +1640,20 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .code-in:focus{outline:none;border-color:var(--accent)}
 .code-in::placeholder{color:var(--muted);opacity:.55;text-transform:none}
 
+/* The sent code, on the drawer's own rhythm — 19px from the body above it,
+   5px to the code, measured off the export rows rather than chosen. White
+   and in the row face: this is the thing you opened the drawer to read, not
+   an aside about it. */
+.sent-when{
+  margin:19px 0 5px;padding:0 10px;
+  font-family:var(--data);font-size:10.5px;color:var(--text);
+}
+.code-actions{display:flex;margin:14px 0 2px;padding:0 10px}
+
 .share-code{
-  margin:0 0 3px;padding:0 10px;font-family:var(--data);font-size:19px;
+  margin:0;padding:0 10px;font-family:var(--data);font-size:16px;
+  /* 16, not 19: at 19 a 31-character code needed 392px inside a 384px
+     column and wrapped every time. */
   color:var(--accent);letter-spacing:.08em;
   /* break between groups, never inside one. break-all split it mid-group
      — "V9 / 6Q" — and a code is read and typed four characters at a

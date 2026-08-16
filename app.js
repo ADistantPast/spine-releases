@@ -4490,6 +4490,11 @@ function paintSeg(title) {
      two real positions, which is why going away and coming back "fixed" it.
      Suppressed for that one commit only; the reflow is what makes removing
      the inline rule take effect from the next frame instead of this one. */
+  /* Belt and braces for the same thing: if the press beat the face home,
+     size the block now and again the moment it lands. check() is true once
+     loaded, so this cannot loop. */
+  if (document.fonts && document.fonts.check && !document.fonts.check("500 13px Poppins"))
+    document.fonts.load("500 13px Poppins").then(() => paintSeg(title)).catch(() => {});
   const first = !bar.classList.contains("ready");
   if (first) ind.style.transition = "none";
   ind.style.width = `${active.offsetWidth}px`;
@@ -4529,7 +4534,18 @@ function measureBar() {
 if (window.ResizeObserver && $("bar")) new ResizeObserver(measureBar).observe($("bar"));
 window.addEventListener("resize", measureBar);
 if (document.fonts && document.fonts.ready)
-  document.fonts.ready.then(() => { measureBar(); fitSegbar(); });
+  document.fonts.ready.then(() => {
+    /* fonts.ready resolves on the faces in use, and weight 500 is asked for
+       by exactly one thing — .seg-btn.on — so it is still unloaded when the
+       first press measures the segment. The label renders in the fallback,
+       comes out 6px narrower, the block is sized to that, and then Poppins
+       500 lands and the label outgrows it. That is the stray outline on the
+       first press; going to another segment and back "fixed" it because by
+       then the face had arrived. Ask for it up front. */
+    const warm = document.fonts.load ? document.fonts.load("500 13px Poppins")
+                                     : Promise.resolve();
+    Promise.resolve(warm).catch(() => {}).then(() => { measureBar(); fitSegbar(); });
+  });
 measureBar();
 fitSegbar();
 
