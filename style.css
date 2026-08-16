@@ -926,9 +926,26 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   display:flex;align-items:center;gap:8px;
   padding:0 10px 10px;font-size:11px;color:var(--muted);
 }
+/* The arrow is ours, not the browser's.
+   Chromium places the native select arrow itself, hard against the right
+   border, so the label had 6px of air on the left and the arrow had none on
+   the right — and padding cannot reliably move something the UA positions.
+   appearance:none and a chevron drawn at a known offset makes the two insets
+   equal by construction: 9px both sides, rather than a number nudged until
+   it looked about right. The colour is --muted written out, because a data
+   URI cannot see custom properties. */
 .lib-sort select{
-  background:var(--field-2);border:1px solid var(--hair);border-radius:6px;
-  color:var(--text);font-family:var(--ui);font-size:11px;padding:3px 6px;
+  appearance:none;-webkit-appearance:none;
+  background-color:var(--panel-2);
+  background-image:url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6' fill='none' stroke='%2379828F' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.2 L4.5 4.8 L8 1.2'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 9px center;
+  border:1px solid var(--hair);border-radius:var(--r-md);
+  /* --dust, to sit at the same weight as the search placeholder directly
+     above it. It was --bone, which read as brighter than the field it lines
+     up under and made the two controls look like different furniture. */
+  color:var(--muted);font-family:var(--ui);font-size:11px;
+  padding:3px 26px 3px 9px;   /* 9px + 9px chevron + 8px gap = 26 */
 }
 .lib-sort select:focus{outline:none;border-color:var(--accent)}
 .lib-sort-hint{
@@ -1420,7 +1437,9 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
      line: measured at 375px it was ellipsised down to "Hold a bo…" sharing
      one with the select. */
   .lib-sort{flex-wrap:wrap;row-gap:6px}
-  .lib-sort select{min-height:34px;font-size:12.5px;padding:0 8px}
+  /* keeps the 9px + 9px chevron + 8px gap on the right; a flat 8px
+     put the arrow on top of the last letter */
+  .lib-sort select{min-height:34px;font-size:12.5px;padding:0 26px 0 9px}
   .lib-sort-hint.coarse{flex:1 0 100%;margin-left:0;text-align:left}
   /* Library rows carry up to four buttons; on a narrow drawer they'd
      otherwise be squeezed to hairlines. Wrap them and give each a real
@@ -1645,10 +1664,15 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
    and in the row face: this is the thing you opened the drawer to read, not
    an aside about it. */
 .sent-when{
-  margin:19px 0 5px;padding:0 10px;
-  font-family:var(--data);font-size:10.5px;color:var(--text);
+  /* the same face and size as the row title above it — measured off
+     "Send it again": Poppins 14px/400, --text, 0.21px of tracking */
+  /* 9, not 19: the row above already contributes its own 9px of bottom
+     padding and the sub's 1px margin, and 19 on top of those measured
+     29. This lands the same optical 19 the rows use between them. */
+  margin:9px 0 5px;padding:0 10px;
+  font-family:var(--ui);font-size:14px;color:var(--text);
+  letter-spacing:var(--track-ui);
 }
-.code-actions{display:flex;margin:14px 0 2px;padding:0 10px}
 
 .share-code{
   margin:0;padding:0 10px;font-family:var(--data);font-size:16px;
@@ -1660,8 +1684,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
      time, so a break in the wrong place makes it hard to say aloud. */
   overflow-wrap:break-word;word-break:normal;
   /* selectable on purpose: copy may be refused and this is the fallback */
-  user-select:all;
+  /* The code is the copy control now, so it has to look pressable and stay
+     selectable for when the clipboard is refused. */
+  user-select:all;cursor:pointer;margin-bottom:16px;
 }
+.share-code:hover{filter:brightness(1.18)}
 
 /* A radio in a row that already knows how to be a row. The input keeps its
    native look — this is a real choice with a real default, and a hand-drawn
