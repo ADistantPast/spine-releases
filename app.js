@@ -3341,23 +3341,17 @@ function wireLibrary() {
     };
   });
 
-  // two-step rather than a native confirm(): one tap arms it, the next
-  // removes, and it disarms itself if you walk away
+  /* One press removes. The two-step "Sure?" was the owner's own call to
+     drop — the arming state read as the button not having worked, and the
+     button is small, out of the way and only on hover on a desktop.
+
+     Worth knowing what that trades: forget() globs <id>.* and there is no
+     undo, so a stray press costs a transcript and whatever GPU hours made
+     it. An undo would need forget() to move the files aside rather than
+     delete them, which is a backend change and therefore an installer. */
   body.querySelectorAll("[data-del-book]").forEach(btn => {
     btn.onclick = async e => {
       e.stopPropagation();
-      if (btn.dataset.armed !== "1") {
-        btn.dataset.armed = "1";
-        btn.textContent = "Sure?";
-        btn.classList.add("danger");
-        clearTimeout(btn._t);
-        btn._t = setTimeout(() => {
-          btn.dataset.armed = "";
-          btn.innerHTML = MINUS_ICON;
-          btn.classList.remove("danger");
-        }, 4000);
-        return;
-      }
       const id = btn.dataset.delBook;
       await api(`/api/forget/${id}`, {});
       if (book && book.id === id) {      // it was the open one — clear the view
