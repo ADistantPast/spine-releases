@@ -163,9 +163,8 @@ $("btnImport").onclick = () => {
       <span class="row-sub">A .spinebook someone sent you. Whatever it has been
         renamed to along the way — the reader looks inside it.</span>
     </div>
-    <p class="hint">Codes last a few hours. The book arrives encrypted and the
-      code is what unlocks it, so the service carrying it never sees what it
-      is holding. Nothing is uploaded from here.</p>`;
+    <p class="hint">Codes last about a day. The book travels encrypted — only
+      the code opens it. Nothing is uploaded from here.</p>`;
 
   $("addFromFile").onclick = () => $("filePick").click();
 
