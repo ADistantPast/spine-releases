@@ -4482,9 +4482,20 @@ function paintSeg(title) {
      same box — subtracting the border put the block a pixel left of every
      segment, which is small and visible when the thing is a filled slab
      directly behind a word. Measured at -0.70 to -1.47px before, ~0 after. */
+  /* The first paint has to arrive, not travel. The block starts width:0 at
+     left:0 with a 220ms transition on both, and .ready flips opacity with no
+     transition at all — so the very first press revealed a sliver at the far
+     edge and swept it across, which reads as a stray outline landing on the
+     button rather than as a selection. Every later press animates between
+     two real positions, which is why going away and coming back "fixed" it.
+     Suppressed for that one commit only; the reflow is what makes removing
+     the inline rule take effect from the next frame instead of this one. */
+  const first = !bar.classList.contains("ready");
+  if (first) ind.style.transition = "none";
   ind.style.width = `${active.offsetWidth}px`;
   ind.style.transform = `translateX(${active.offsetLeft}px)`;
   bar.classList.add("ready");
+  if (first) { void ind.offsetWidth; ind.style.transition = ""; }
 }
 
 // a label's width moves with the window, so the block has to be re-measured

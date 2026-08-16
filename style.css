@@ -1642,7 +1642,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 
 .share-code{
   margin:0 0 3px;padding:0 10px;font-family:var(--data);font-size:19px;
-  color:var(--accent);letter-spacing:.08em;word-break:break-all;
+  color:var(--accent);letter-spacing:.08em;
+  /* break between groups, never inside one. break-all split it mid-group
+     — "V9 / 6Q" — and a code is read and typed four characters at a
+     time, so a break in the wrong place makes it hard to say aloud. */
+  overflow-wrap:break-word;word-break:normal;
   /* selectable on purpose: copy may be refused and this is the fallback */
   user-select:all;
 }
