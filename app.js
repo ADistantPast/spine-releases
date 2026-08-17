@@ -1052,9 +1052,33 @@ function frame() {
     checkSleep();
     syncOnChapter(t);
   }
-  requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+
+/* The loop must not be killable.
+ *
+ * The reschedule used to be the last line of frame(), inside it — so anything
+ * throwing in the body above skipped it and the loop was over for the rest of
+ * the session. Audio is driven by the media pipeline rather than by this, so
+ * it carried on playing while the words stopped moving and nothing said why.
+ * Reported as: leave the app on Android for a while, come back, and the text
+ * has stopped following while the voice keeps going.
+ *
+ * Asking for the next frame *before* running the body means a throw costs one
+ * frame instead of every frame after it, and the catch keeps the console from
+ * filling at 60 a second while still saying it once. */
+let frameFailed = false;
+function frameLoop() {
+  requestAnimationFrame(frameLoop);
+  try {
+    frame();
+  } catch (e) {
+    if (!frameFailed) {
+      frameFailed = true;
+      console.error("[spine] the highlight loop threw; it keeps running", e);
+    }
+  }
+}
+requestAnimationFrame(frameLoop);
 
 /* ------------------------------------------------------------ timeline */
 
@@ -1216,6 +1240,16 @@ function snapTicks() {
 
 function fitTickLabels() {
   const tl = $("timeline");
+  /* Refuse to answer rather than answer wrongly.
+     The whole method is "lay the labels out and see whether any two touch",
+     and in a hidden timeline every label is 0 wide at the same place — so
+     nothing collides, the escalation is stripped, and coming back showed all
+     of a book's chapter numbers on a track with room for none of them.
+     Measured leaving the pop-out at 375px: `stagger tight nonums` became a
+     bare `timeline` and 0 visible numbers became 21. A fit computed against
+     display:none is not a fit. */
+  const rail = $("track");
+  if (!rail || rail.getBoundingClientRect().width < 1) return;
   tl.classList.remove("stagger", "tight", "nonums");
 
   if (labelsCollide(TICK_GAP)) {
@@ -1994,6 +2028,13 @@ $("btnPop").onclick = $("btnPopExit").onclick = () => {
      view paused, and never when playing. */
   snapToPlayhead("instant");
   positionScrollRail();
+  /* The timeline is display:none in the reading view, so any fit attempted
+     while it was open refused (see fitTickLabels) and the labels are still
+     laid out for whatever width applied before. Coming back is the first
+     moment the track has a width again — without this, every chapter number
+     reappeared on a track with room for none, which is what "all the
+     chapters show up at the bottom" was. */
+  if (!compact) fitTickLabelsSoon();
 };
 
 $("page").onclick = e => {
