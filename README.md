@@ -69,13 +69,20 @@ Untick it whenever you want the space back; your place and notes stay.
 
 ## Download
 
+[![latest release](https://img.shields.io/github/v/release/ADistantPast/spine-releases?label=latest&color=2563EB)](../../releases/latest)
+[![released](https://img.shields.io/github/release-date/ADistantPast/spine-releases?label=released&color=6B665C)](../../releases/latest)
+
 | | |
 |---|---|
-| **Windows** | `Spine-Installer-<version>.exe` from [the latest release](../../releases/latest) |
-| **Android** | `Spine-<version>.apk` from the same place |
+| **Windows** | `Spine-Installer-<version>.exe` from [the latest release](../../releases/latest) — about 1 GB |
+| **Android** | [**Spine-latest.apk**](../../releases/latest/download/Spine-latest.apk) — a link that always points at the newest build |
 
-The `Spine-Update-*.zip` files are not for downloading by hand — Spine fetches
-those itself when a small update is available.
+Those badges read the release list directly, so the version above is always
+the current one — nothing here has to be edited when a release goes out.
+
+The `spine-web-*.zip` and `spine-android-web-*.zip` files are not for
+downloading by hand. Spine fetches those itself when an update only changes
+the interface, which is most of them.
 
 ### Installing on Windows
 
