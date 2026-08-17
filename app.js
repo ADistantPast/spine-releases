@@ -3901,11 +3901,46 @@ function syncPopHtml() {
     ${theirsAt != null ? `
     <p class="sync-count">${esc(theirsBy || "Your other device")} is at ${clock(theirsAt)}</p>
     <div class="sync-row"><button class="btn ghost" id="syncGoThere">Go there</button></div>` : ""}
+    <!-- Six characters you can read down a phone, instead of twenty-six.
+         The long code stays below it because it is the thing that identifies
+         the record and never expires; the short one is a ten-minute claim on
+         it, and a device that claims it keeps the long one. -->
+    <div class="sync-row"><button class="btn ghost" id="syncPairBtn">Pair a device</button></div>
+    <div id="syncPairBox" hidden>
+      <p class="sent-when" id="syncPairWhen"></p>
+      <p class="share-code" id="syncPairCode"></p>
+    </div>
     <div class="sync-yours">
       <p class="hint">Your code</p>
       <p class="sync-code">${esc(s.code)}</p>
     </div>
     <div id="syncPairs"></div>`;
+}
+
+/* The pairing code, counting itself down. Cleared when it runs out rather
+   than left on screen: a code that has expired looks exactly like one that
+   works, and the reader would type it and be told they got it wrong. */
+let pairTick = null;
+function showPairCode(code, ttl) {
+  const box = $("syncPairBox"), when = $("syncPairWhen"), out = $("syncPairCode");
+  if (!box || !code) return;
+  out.textContent = code;
+  box.hidden = false;
+  let left = ttl;
+  clearInterval(pairTick);
+  const paint = () => {
+    if (!document.contains(box)) return clearInterval(pairTick);
+    if (left <= 0) {
+      clearInterval(pairTick);
+      box.hidden = true;
+      return toast("That pairing code has expired. Make another.");
+    }
+    const m = Math.floor(left / 60), s = left % 60;
+    when.textContent = `Type this on the other device — ${m}:${String(s).padStart(2, "0")} left`;
+    left -= 1;
+  };
+  paint();
+  pairTick = setInterval(paint, 1000);
 }
 
 function openSyncPop() {
@@ -3934,6 +3969,18 @@ function openSyncPop() {
     playFrom(at);
     closeSyncPop();
     toast(`Moved to ${clock(at)} — where ${theirsBy || "your other device"} left off.`);
+  });
+
+  /* A short code for another device. It is asked for, not shown by default:
+     it expires, so an old one sitting on screen would be a code that no
+     longer works with nothing saying so. */
+  $("syncPairBtn")?.addEventListener("click", async () => {
+    const btn = $("syncPairBtn");
+    btn.disabled = true;
+    const r = await syncApi("/api/sync/paircode", {});
+    btn.disabled = false;
+    if (!r || r.error) return toast((r && r.error) || "Could not make a pairing code.");
+    showPairCode(r.code, r.ttl || 600);
   });
 
   $("syncJoinBtn")?.addEventListener("click", () => {
@@ -4289,9 +4336,28 @@ async function localSync(path, body) {
       return { code: lsCode(out.id) };
     } catch (e) { return { error: e.message }; }
   }
+  /* A short code for another device to type. Ten minutes, then gone — see
+     the Worker. Only a device that already holds the long id can ask. */
+  if (rest === "paircode") {
+    if (!s.id) return { error: "There is no code on this device yet." };
+    if (lsLegacy(s.id))
+      return { error: "This device is on the old sync service. Press Forget and start a new code." };
+    try {
+      const out = await wCall("/pair", { id: s.id });
+      return { code: out.code, ttl: out.ttl || 600 };
+    } catch (e) { return { error: e.message || "Could not make a pairing code." }; }
+  }
   if (rest === "join") {
     try {
-      const id = lsRecId(body.code);
+      /* Six characters is a pairing code and has to be exchanged for the real
+         id before anything else; twenty-six already *is* the id and is
+         accepted for ever, because every device paired before this holds one. */
+      const typed = String(body.code || "").toUpperCase().replace(/[^0-9A-Z]/g, "")
+        .replace(/[OU]/g, "0").replace(/[IL]/g, "1");
+      const id = typed.length === 6
+        ? (await wCall("/claim", { code: typed })).id
+        : lsRecId(body.code);
+      if (!id) throw new Error("That pairing code has expired or was typed wrong.");
       await wCall("/read", { id });            // prove it exists before keeping it
       lsSave({ id, last: 0, device: s.device || "" });
       return { code: lsCode(id) };
