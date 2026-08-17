@@ -3393,7 +3393,12 @@ function wireLibrary() {
     btn.onclick = async e => {
       e.stopPropagation();
       const id = btn.dataset.delBook;
-      await api(`/api/forget/${id}`, {});
+      /* Check the answer. This used to be fire-and-forget, so a removal that
+         failed took the row off the list and left the book on disk — and the
+         only sign was the next time that audio was opened, when it came
+         straight back without transcribing. */
+      const gone = await api(`/api/forget/${id}`, {});
+      if (gone && gone.error) return toast(gone.error);   // the row stays; nothing was removed
       if (book && book.id === id) {      // it was the open one — clear the view
         book = null;
         audio.pause();
@@ -3905,7 +3910,7 @@ function syncPopHtml() {
       <button class="btn ghost" id="syncJoinBtn">I have one</button>
     </div>
     <div id="syncJoinBox" hidden>
-      <input id="syncJoinCode" placeholder="0000-0000-0000-0000-0000-0000-00"
+      <input id="syncJoinCode" placeholder="6-character code"
              spellcheck="false" autocomplete="off">
       <div class="sync-row"><button class="btn" id="syncJoinGo">Join</button></div>
     </div>`;
@@ -3933,7 +3938,7 @@ function syncPopHtml() {
               edge. Two fit, and can be big enough to hit. The box below stays,
               because pasting a code into the name field still opens it. -->
          <div id="syncJoinBox" hidden>
-           <input id="syncJoinCode" placeholder="0000-0000-0000-0000-0000-0000-00"
+           <input id="syncJoinCode" placeholder="6-character code"
                   spellcheck="false" autocomplete="off">
            <div class="sync-row"><button class="btn" id="syncJoinGo">Join</button></div>
          </div>`}
@@ -3942,18 +3947,17 @@ function syncPopHtml() {
     ${theirsAt != null ? `
     <p class="sync-count">${esc(theirsBy || "Your other device")} is at ${clock(theirsAt)}</p>
     <div class="sync-row"><button class="btn ghost" id="syncGoThere">Go there</button></div>` : ""}
-    <!-- Six characters you can read down a phone, instead of twenty-six.
-         The long code stays below it because it is the thing that identifies
-         the record and never expires; the short one is a ten-minute claim on
-         it, and a device that claims it keeps the long one. -->
-    <div class="sync-row"><button class="btn ghost" id="syncPairBtn">Pair a device</button></div>
+    <!-- Six characters, and nothing else on show.
+         The twenty-six character id is still what identifies the record and
+         still what a device stores, but it is no longer displayed: it is not
+         something anyone should be reading out or typing, and showing both
+         only invited the question of which one to use. The short code lasts
+         ten minutes, which is long enough to walk to another device and far
+         too short to be worth guessing. -->
+    <div class="sync-row"><button class="btn" id="syncPairBtn">Pair a device</button></div>
     <div id="syncPairBox" hidden>
       <p class="sent-when" id="syncPairWhen"></p>
       <p class="share-code" id="syncPairCode"></p>
-    </div>
-    <div class="sync-yours">
-      <p class="hint">Your code</p>
-      <p class="sync-code">${esc(s.code)}</p>
     </div>
     <div id="syncPairs"></div>`;
 }
