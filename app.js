@@ -3954,7 +3954,6 @@ function syncPopHtml() {
          only invited the question of which one to use. The short code lasts
          ten minutes, which is long enough to walk to another device and far
          too short to be worth guessing. -->
-    <div class="sync-row"><button class="btn" id="syncPairBtn">Pair a device</button></div>
     <div id="syncPairBox" hidden>
       <p class="sent-when" id="syncPairWhen"></p>
       <p class="share-code" id="syncPairCode"></p>
@@ -4016,17 +4015,16 @@ function openSyncPop() {
     toast(`Moved to ${clock(at)} — where ${theirsBy || "your other device"} left off.`);
   });
 
-  /* A short code for another device. It is asked for, not shown by default:
-     it expires, so an old one sitting on screen would be a code that no
-     longer works with nothing saying so. */
-  $("syncPairBtn")?.addEventListener("click", async () => {
-    const btn = $("syncPairBtn");
-    btn.disabled = true;
-    const r = await syncApi("/api/sync/paircode", {});
-    btn.disabled = false;
-    if (!r || r.error) return toast((r && r.error) || "Could not make a pairing code.");
-    showPairCode(r.code, r.ttl || 600);
-  });
+  /* The code is simply there when the panel is open — no button to press for
+     it. It is fetched on open rather than kept, because it expires: a code
+     left on screen from ten minutes ago is one that no longer works with
+     nothing saying so, and the countdown is what makes that honest. */
+  if (syncInfo.code && !syncInfo.lost) {
+    syncApi("/api/sync/paircode", {}).then(r => {
+      if (!r || r.error || !document.contains($("syncPairBox"))) return;
+      showPairCode(r.code, r.ttl || 600);
+    }).catch(() => {});
+  }
 
   $("syncJoinBtn")?.addEventListener("click", () => {
     $("syncJoinBox").hidden = false;
