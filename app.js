@@ -1071,8 +1071,19 @@ function frame() {
  * frame instead of every frame after it, and the catch keeps the console from
  * filling at 60 a second while still saying it once. */
 let frameFailed = false;
-function frameLoop() {
-  requestAnimationFrame(frameLoop);
+/* When the loop last ran. Android stops handing a backgrounded WebView
+   frames, which is expected and fine — the loop picks up again on return. It
+   is only evidence of a *dead* loop if the page is visible and still nothing
+   has ticked, which is what the resume check below asks. */
+let lastFrameAt = 0;
+/* One generation per loop, so a restart cannot leave two running: the old
+   callback sees a newer generation and stops. Two loops would double every
+   scroll and every class write in frame(). */
+let frameGen = 0;
+function frameLoop(gen) {
+  if (gen !== frameGen) return;
+  requestAnimationFrame(() => frameLoop(gen));
+  lastFrameAt = performance.now();
   try {
     frame();
   } catch (e) {
@@ -1082,7 +1093,7 @@ function frameLoop() {
     }
   }
 }
-requestAnimationFrame(frameLoop);
+requestAnimationFrame(() => frameLoop(frameGen));
 
 /* ------------------------------------------------------------ timeline */
 
@@ -2216,8 +2227,49 @@ $("jumpNow").onclick = () => snapToPlayhead();
    switching between the reader and the pop-out. Instant, not smooth: after
    a gap the distance is screens, and animating it reads as the page
    crawling. */
+/* Coming back to the app, the transport has to agree with the element again.
+ *
+ * Reported twice, most recently as: leave Spine playing, open Instagram, let
+ * a video play, come back — and the app is stuck and not following. Two
+ * separate things can be true by then and neither is visible:
+ *
+ * - **Another app took audio focus, so our element was paused by the
+ *   platform.** Nothing in the page asked for that, so `wantPlaying` is
+ *   still true and the button still shows the pause glyph over a book that
+ *   is not playing. The same class of desync as assigning `audio.src`, which
+ *   also pauses and fires no `pause` event — that one is documented at
+ *   length; this is the other way in.
+ * - **The highlight loop may not have survived.** A hidden WebView gets no
+ *   frames, which is expected; a loop that is not ticking *while visible* is
+ *   a dead loop, and the text then sits still while the voice carries on.
+ *
+ * So: kick the loop if it is not running, light the words from wherever the
+ * element actually is, and make the button tell the truth. Resuming is
+ * attempted once — if the platform refuses, the button says paused rather
+ * than pretending. */
+function reconcilePlayback() {
+  if (!book) return;
+  if (performance.now() - lastFrameAt > 1000) {
+    frameGen += 1;
+    frameFailed = false;
+    requestAnimationFrame(() => frameLoop(frameGen));
+  }
+  if (wantPlaying && audio.paused && !audio.error) {
+    const p = audio.play();
+    if (p && p.catch) p.catch(err => {
+      if (err.name === "AbortError" || err.name === "NotSupportedError") return;
+      wantPlaying = false;
+      syncPlayButton();
+    });
+  }
+  syncPlayButton();
+  playUi();
+  if (typeof pushMediaState === "function") pushMediaState();
+}
+
 function snapOnReturn() {
   if (!book) return;
+  reconcilePlayback();
   follow = true;
   browseT = audio.currentTime;
   snapToPlayhead("instant");
@@ -3945,6 +3997,16 @@ function placesHtml(s) {
       <p class="places-none">${book ? "Nothing synced for this book yet."
                                     : "Nothing synced yet."}</p></div>`;
   return `<div class="places-block">${head}<div class="places">${rows.map(p => {
+    /* The chapter, after the timecode. The desktop names it for every row
+       because it holds the whole book; the phone and the web reader only hold
+       the open one, so they name that themselves — which is the row you are
+       looking at anyway, now that the list is this book only. */
+    /* chapterAt() already exists and answers with an *index* — reuse it
+       rather than writing a second one that answers with a name and shadows
+       it. (It did, and the file stopped parsing, which is the good outcome.)
+       It reads `book` directly, so it is only asked about the open book. */
+    const ch = p.chapter || (book && p.bid === book.id && (book.chapters || []).length
+      ? (book.chapters[chapterAt(p.pos)] || {}).name || "" : "");
     /* Two lines, because one could not hold it. Everything on a single row
        — time, title, device, age — overflowed at the panel's 296px and the
        ellipsis ate the age, which is the half you are reading the row for:
@@ -3963,6 +4025,7 @@ function placesHtml(s) {
               data-bid="${esc(p.bid || "")}" data-pos="${p.pos}"
               title="${gone ? "This book is not on this device." : "Go to " + clock(p.pos)}">
         <span class="place-at">${clock(p.pos)}</span>
+        <span class="place-ch">${ch ? "· " + esc(ch) : ""}</span>
         <span class="place-ago">${esc(syncAgo(p.at))}</span>
         <span class="place-by">${who}</span>
       </button>`;

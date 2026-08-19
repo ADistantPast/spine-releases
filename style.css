@@ -1445,7 +1445,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
      showed it because its rule is scoped .app:not(.compact) and so
      outranks its own. */
   .bar .sync{position:absolute;top:calc(18px + var(--safe-t));right:calc(22px + var(--safe-r));margin-bottom:0;order:0}
-  .bar .bar-title{padding-right:74px}
+  /* Clearance for the pill, which is absolute here and so cannot push the
+     title aside. 74px was the width of the pill when it carried the word
+     "Unsynced"; it is a 36px circle at this width now, so the title was
+     reserving nearly forty pixels it no longer needed and wrapping early. */
+  .bar .bar-title{padding-right:48px}
   /* Thumb-sized, matching .lib-actions .row-go below. The hint takes its own
      line: measured at 375px it was ellipsised down to "Hold a bo…" sharing
      one with the select. */
@@ -1844,7 +1848,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 }
 .sync-pop .linky:hover{color:var(--accent)}
 .sync-pop .place{
-  display:grid;grid-template-columns:auto 1fr;column-gap:9px;row-gap:1px;
+  /* time · chapter | age, then the device underneath. Three columns rather
+     than two so the age keeps its own right-hand column and the chapter is
+     the only thing that can be cut. */
+  display:grid;grid-template-columns:auto 1fr auto;column-gap:7px;row-gap:1px;
   width:100%;appearance:none;
   background:var(--panel-2);border:1px solid var(--hair);border-radius:var(--r-md);
   padding:6px 9px 7px;text-align:left;cursor:pointer;font:inherit;color:var(--text);
@@ -1875,6 +1882,11 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .sync-pop .place-ago{
   font-family:var(--ui);font-size:11px;color:var(--muted);letter-spacing:var(--track-ui);
   justify-self:end;align-self:baseline;white-space:nowrap;
+}
+.sync-pop .place-ch{
+  font-family:var(--ui);font-size:11.5px;color:var(--muted);
+  letter-spacing:var(--track-ui);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .sync-pop .place-by{
   grid-column:1 / -1;
@@ -2012,6 +2024,35 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   .seg-ind{display:none}
   .seg-btn{flex:1 1 0;padding:8px 4px;text-align:center}
   .seg-btn.on{background:var(--panel-2)}
+
+  /* ---- the sync pill is a circle on a phone --------------------------------
+   * Reported as the dot digging into its own label. At this size the word is
+   * the thing that does not fit, and it is also the least useful half: the
+   * colour already carries the state, the panel behind the press explains it,
+   * and the theme switch beside it is already a circle — so a second circle
+   * reads as its sibling rather than as an orphan.
+   *
+   * The label is hidden rather than removed from the markup, so the desktop
+   * keeps it and there is one interface to maintain. It stays in the
+   * accessibility tree via aria-label on the button.
+   *
+   * Scoped .bar, matching the placement rule above it: a bare .sync-btn here
+   * loses to the wide-layout .bar .sync-btn further down the file, which is the
+   * trap this same pill has already been caught by twice. */
+  /* `.bar .sync .sync-btn`, not `.bar .sync-btn`. These copies write their
+     media queries unscoped, and there is a plain `.bar .sync-btn{padding:0
+     14px}` further down the file — same 0,2,0, so the later one wins and the
+     circle would keep fourteen pixels of side padding and shove its own dot
+     out of the middle. Which is very close to what was reported. Third time
+     this pill has been caught by exactly this. */
+  .bar .sync .sync-btn{
+    width:var(--ctl-h);height:var(--ctl-h);padding:0;gap:0;
+    justify-content:center;border-radius:50%;
+  }
+  .bar .sync .sync-btn #syncLabel{display:none}
+  /* Bigger, because it is now the whole control rather than an indicator
+     beside a word. */
+  .bar .sync .sync-led{width:10px;height:10px}
 }
 
 /* ---- numbers -----------------------------------------------------------
