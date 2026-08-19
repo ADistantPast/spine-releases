@@ -3919,14 +3919,32 @@ function syncAgo(t) {
  * places in other books follow, and open that book when taken. */
 const PLACE_ROWS = 5;
 
+const REFRESH_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M20 11a8 8 0 1 0-.9 4.5"/><path d="M20 5.5V11h-5.5"/></svg>`;
+
 function placesHtml(s) {
   const all = s.places || [];
-  if (!all.length) return "";
-  const here = book ? all.filter(p => p.bid === book.id) : [];
-  const rest = all.filter(p => !book || p.bid !== book.id);
-  const rows = here.concat(rest).slice(0, PLACE_ROWS);
-  if (!rows.length) return "";
-  return `<div class="places">${rows.map(p => {
+  if (!s.code) return "";
+  /* The book you are on, and nothing else — the owner's call, and it is the
+     right one: a place is somewhere to carry on reading, and rows for four
+     other books are four things to read past. With no book open there is no
+     "book you are on", so the recent ones across the library are shown
+     instead and each row says which book it belongs to. */
+  const rows = (book ? all.filter(p => p.bid === book.id) : all).slice(0, PLACE_ROWS);
+  const head = `<div class="places-head">
+      <span>${book ? "Places in this book" : "Recent places"}</span>
+      <button class="place-refresh" id="syncRefresh"
+              title="Get the latest from your other devices">${REFRESH_ICON}</button>
+    </div>`;
+  /* The header stays even with nothing under it, because the refresh lives in
+     it: a panel that can only be refreshed once it already has something to
+     show is no use to the device that is waiting for the other one. */
+  if (!rows.length)
+    return `<div class="places-block">${head}
+      <p class="places-none">${book ? "Nothing synced for this book yet."
+                                    : "Nothing synced yet."}</p></div>`;
+  return `<div class="places-block">${head}<div class="places">${rows.map(p => {
     /* Two lines, because one could not hold it. Everything on a single row
        — time, title, device, age — overflowed at the panel's 296px and the
        ellipsis ate the age, which is the half you are reading the row for:
@@ -3948,7 +3966,7 @@ function placesHtml(s) {
         <span class="place-ago">${esc(syncAgo(p.at))}</span>
         <span class="place-by">${who}</span>
       </button>`;
-  }).join("")}</div>`;
+  }).join("")}</div></div>`;
 }
 
 /* Which panel this is, rather than what it says: a code appearing or the
@@ -3958,7 +3976,8 @@ function placesHtml(s) {
    disappears with it. Their *contents* are not: paintSync rewrites those in
    place, the same as the two status lines, so a sync that lands while the
    panel is open does not flicker the whole panel. */
-const syncShape = s => `${!!s.code}|${!!s.lost}|${((s.places || []).length > 0)}`;
+const syncShape = s =>
+  `${!!s.code}|${!!s.lost}|${(s.places || []).some(p => !p.mine)}`;
 let syncDrawn = "";
 
 function paintSync() {
@@ -3969,7 +3988,7 @@ function paintSync() {
   if (w) w.innerHTML = syncWhenLine(syncInfo);
   const c = pop.querySelector(".sync-count");
   if (c) c.textContent = syncCountLine(syncInfo);
-  const pl = pop.querySelector(".places");
+  const pl = pop.querySelector(".places-block");
   if (pl) pl.outerHTML = placesHtml(syncInfo) || "";
 }
 
@@ -4034,6 +4053,14 @@ function syncPopHtml() {
          in a panel about keeping two devices in step, which is the one place
          it needed no explaining — and at 296px it wrapped, pushing the
          countdown onto a line of its own. -->
+    <!-- The code is an invitation, so it is on show while nobody has accepted
+         it and out of the way once somebody has. Two devices that have paired
+         remember each other and never need it again — leaving it on screen,
+         counting down and re-minting itself, is what made the pairing look
+         like it kept resetting. -->
+    ${(s.places || []).some(p => !p.mine)
+      ? `<div class="pair-more"><button class="linky" id="syncPairMore">Add another device</button></div>`
+      : ""}
     <div id="syncPairBox" hidden>
       <p class="pair-code">
         <span id="syncPairCode"></span><span class="pair-left" id="syncPairLeft"></span>
@@ -4045,6 +4072,16 @@ function syncPopHtml() {
 /* The pairing code, counting itself down. Cleared when it runs out rather
    than left on screen: a code that has expired looks exactly like one that
    works, and the reader would type it and be told they got it wrong. */
+/* One fetch, one place to put the answer. The backend hands back the same
+   code until it expires, so opening the panel twice shows the same six
+   characters rather than a new pair each time. */
+function askPairCode() {
+  syncApi("/api/sync/paircode", {}).then(r => {
+    if (!r || r.error || !document.contains($("syncPairBox"))) return;
+    showPairCode(r.code, r.ttl || 600);
+  }).catch(() => {});
+}
+
 let pairTick = null;
 function showPairCode(code, ttl) {
   const box = $("syncPairBox"), out = $("syncPairCode"), rest = $("syncPairLeft");
@@ -4109,6 +4146,25 @@ function openSyncPop() {
   if (!pop.dataset.placesBound) {
     pop.dataset.placesBound = "1";
     pop.addEventListener("click", async e => {
+      /* Read the record and repaint, writing nothing. Deliberately not Sync
+         now: this asks where everyone else is without putting our own
+         reading in front of theirs. It lives in here rather than in a
+         listener of its own because #syncPop outlives its innerHTML — a
+         second handler added per open is the stacking bug again. */
+      const ref = e.target.closest("#syncRefresh");
+      if (ref) {
+        ref.classList.add("spinning");
+        const got = await syncApi("/api/sync/peek", {});
+        ref.classList.remove("spinning");
+        if (!got || got.error)
+          return toast((got && got.error) || "Could not reach the sync service.");
+        if (got.lost) { await refreshSync(); return openSyncPop(); }
+        syncInfo.places = got.places || [];
+        syncInfo.others = got.others || {};
+        if (got.shared !== undefined) syncInfo.shared = got.shared;
+        noteTheirPlace(syncInfo.others);
+        return paintSync();
+      }
       const row = e.target.closest(".place");
       if (!row || row.disabled) return;
       const bid = row.dataset.bid, pos = Number(row.dataset.pos) || 0;
@@ -4127,12 +4183,15 @@ function openSyncPop() {
      it. It is fetched on open rather than kept, because it expires: a code
      left on screen from ten minutes ago is one that no longer works with
      nothing saying so, and the countdown is what makes that honest. */
-  if (syncInfo.code && !syncInfo.lost) {
-    syncApi("/api/sync/paircode", {}).then(r => {
-      if (!r || r.error || !document.contains($("syncPairBox"))) return;
-      showPairCode(r.code, r.ttl || 600);
-    }).catch(() => {});
-  }
+  const paired = (syncInfo.places || []).some(p => !p.mine);
+  if (syncInfo.code && !syncInfo.lost && !paired) askPairCode();
+
+  /* Somebody has already joined, so the code is behind a word rather than on
+     show. Same fetch, same ten minutes, same cached code. */
+  $("syncPairMore")?.addEventListener("click", e => {
+    e.target.closest(".pair-more").hidden = true;
+    askPairCode();
+  });
 
   $("syncJoinBtn")?.addEventListener("click", () => {
     $("syncJoinBox").hidden = false;
@@ -4518,10 +4577,43 @@ async function localSync(path, body) {
     if (!s.id) return { error: "There is no code on this device yet." };
     if (lsLegacy(s.id))
       return { error: "This device is on the old sync service. Press Forget and start a new code." };
+    /* The same code until it expires. A new one on every open reads as the
+       pairing resetting itself, and the devices in fact remember each other
+       perfectly well — it was only the invitation flickering. */
+    const held = s.pair || {};
+    const left = Math.round((held.until || 0) - Date.now() / 1000);
+    if (held.code && left > 20) return { code: held.code, ttl: left };
     try {
       const out = await wCall("/pair", { id: s.id });
-      return { code: out.code, ttl: out.ttl || 600 };
+      const ttl = out.ttl || 600;
+      const cur = lsSync();
+      if ((cur.id || "") === s.id) {
+        cur.pair = { code: out.code, until: Math.round(Date.now() / 1000) + ttl };
+        lsSave(cur);
+      }
+      return { code: out.code, ttl };
     } catch (e) { return { error: e.message || "Could not make a pairing code." }; }
+  }
+  /* Read and repaint, writing nothing — what the refresh beside the places
+     asks for. Sync now would also push, and "where is everyone else" should
+     not be the same gesture as "put my reading in front of theirs". */
+  if (rest === "peek") {
+    if (!s.id) return { error: "No sync code yet." };
+    if (lsLegacy(s.id)) return { lost: true, error: "The sync record is gone from the service." };
+    let rec;
+    try { rec = await wCall("/read", { id: s.id }); }
+    catch (e) { return e.lost ? { lost: true, error: "The sync record is gone from the service." }
+                              : { error: e.message }; }
+    const remote = (rec.record || {}).books || {};
+    const who = lsDevice();
+    const others = {};
+    for (const k of Object.keys(remote))
+      if ((remote[k].by || "") !== who)
+        others[k] = { pos: +(remote[k].pos || 0), by: remote[k].by || "", at: remote[k].at || 0 };
+    const cur = lsSync();
+    if ((cur.id || "") === s.id) { cur.mirror = remote; cur.others = others; lsSave(cur); }
+    return { ok: true, others, places: lsPlaces(remote, slots, who),
+             shared: Object.keys(remote).length };
   }
   if (rest === "join") {
     try {

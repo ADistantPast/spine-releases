@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.1.19";
+  const WEB_VERSION = "1.1.20";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -906,6 +906,41 @@
         saveSync(s);
         return { code: syncCode(s.id), carried: Object.keys(s.mirror || {}).length };
       } catch (e) { return { error: e.message }; }
+    }
+    /* A short code another device can type. This route never existed here —
+       the six-character pairing went into app.py and the phone's in-page copy
+       and was never mirrored, so the web reader has never been able to show
+       one. The same code is handed back until it expires: minting a new one
+       on every open reads as the pairing resetting itself. */
+    if (rest === "paircode" && post) {
+      if (!s.id) return { error: "There is no code on this device yet." };
+      const held = s.pair || {};
+      const left = Math.round((held.until || 0) - Date.now() / 1000);
+      if (held.code && left > 20) return { code: held.code, ttl: left };
+      try {
+        const out = await syncCall("/pair", { id: s.id });
+        const ttl = out.ttl || 600;
+        s.pair = { code: out.code, until: Math.round(Date.now() / 1000) + ttl };
+        saveSync(s);
+        return { code: out.code, ttl };
+      } catch (e) { return { error: e.message || "Could not make a pairing code." }; }
+    }
+    /* Read and repaint, writing nothing — the refresh beside the places. */
+    if (rest === "peek" && post) {
+      if (!s.id) return { error: "No sync code yet." };
+      let rec;
+      try { rec = await syncCall("/read", { id: s.id }); }
+      catch (e) { return e.lost ? { lost: true, error: "The sync record is gone from the service." }
+                                : { error: e.message }; }
+      const remote = (rec.record || {}).books || {};
+      const who = deviceName();
+      const others = {};
+      for (const k of Object.keys(remote))
+        if ((remote[k].by || "") !== who)
+          others[k] = { pos: +(remote[k].pos || 0), by: remote[k].by || "", at: remote[k].at || 0 };
+      s.mirror = remote; s.others = others; saveSync(s);
+      return { ok: true, others, places: placesOf(remote, slots, who),
+               shared: Object.keys(remote).length };
     }
     if (rest === "pair" && post) {
       const b = await getBook(String(body.id || ""));

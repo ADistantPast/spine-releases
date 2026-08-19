@@ -1811,7 +1811,38 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * panel resets `p` with an element selector, and a bare class added later
  * cannot beat 0,1,1 whatever the order. Rows are their own group, so the 14px
  * hangs above the block and 5px separates the rows inside it. */
-.sync-pop .places{margin:14px 0 0;display:flex;flex-direction:column;gap:5px}
+/* The block: a quiet label with the refresh opposite it, then the rows. The
+   label earns its place by giving the refresh somewhere to live — and the
+   header stays even when there are no rows, because the device waiting for
+   the other one is exactly who needs to press it. */
+.sync-pop .places-block{margin:14px 0 0}
+.sync-pop .places-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-family:var(--ui);font-size:11px;color:var(--muted);
+  letter-spacing:var(--track-ui);padding-bottom:5px;
+}
+.sync-pop .place-refresh{
+  appearance:none;background:none;border:0;padding:0;margin:0;
+  width:20px;height:20px;display:grid;place-items:center;
+  color:var(--muted);cursor:pointer;border-radius:var(--r-sm,5px);
+}
+.sync-pop .place-refresh svg{width:15px;height:15px;display:block}
+.sync-pop .place-refresh:hover{color:var(--accent)}
+.sync-pop .place-refresh.spinning svg{animation:placespin .7s linear infinite}
+@keyframes placespin{to{transform:rotate(360deg)}}
+.sync-pop .places-none{
+  font-family:var(--ui);font-size:11.5px;color:var(--muted);margin:0;
+}
+.sync-pop .places{display:flex;flex-direction:column;gap:5px}
+/* Once another device is in the record the code is not needed again, so it
+   sits behind a word instead of counting down in the corner for ever. */
+.sync-pop .pair-more{margin:14px 0 0}
+.sync-pop .linky{
+  appearance:none;background:none;border:0;padding:0;margin:0;
+  font-family:var(--ui);font-size:11.5px;letter-spacing:var(--track-ui);
+  color:var(--muted);text-decoration:underline;text-underline-offset:2px;cursor:pointer;
+}
+.sync-pop .linky:hover{color:var(--accent)}
 .sync-pop .place{
   display:grid;grid-template-columns:auto 1fr;column-gap:9px;row-gap:1px;
   width:100%;appearance:none;
