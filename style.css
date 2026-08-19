@@ -1757,6 +1757,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   background:var(--panel);border:1px solid var(--hair);border-radius:8px;
   padding:12px;box-shadow:var(--lift-md);
   font-size:12px;color:var(--muted);line-height:1.5;
+  /* Five places over several books makes this taller than it used to be, and
+     it hangs off the bar — on a short window or a phone in landscape it would
+     otherwise run off the bottom of the screen with the pairing code on it. */
+  max-height:min(78vh, 620px);overflow:auto;
 }
 /* A <p> keeps its 1em margins unless something says otherwise, and nothing
    here did: the first line of the panel sat 25px below the top edge while
@@ -1801,6 +1805,78 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   font-family:var(--data);font-size:12px;color:var(--accent);
   letter-spacing:.05em;word-break:break-all;user-select:all;margin:0;
 }
+/* Places: one row per sync, newest first, each one a button that goes there.
+ *
+ * Scoped through .sync-pop for the reason written above the pair code: this
+ * panel resets `p` with an element selector, and a bare class added later
+ * cannot beat 0,1,1 whatever the order. Rows are their own group, so the 14px
+ * hangs above the block and 5px separates the rows inside it. */
+.sync-pop .places{margin:14px 0 0;display:flex;flex-direction:column;gap:5px}
+.sync-pop .place{
+  display:grid;grid-template-columns:auto 1fr;column-gap:9px;row-gap:1px;
+  width:100%;appearance:none;
+  background:var(--panel-2);border:1px solid var(--hair);border-radius:var(--r-md);
+  padding:6px 9px 7px;text-align:left;cursor:pointer;font:inherit;color:var(--text);
+}
+/* No inner scroller. Capping the rows' own height cut the last one across
+   the middle, which reads as a rendering fault rather than as "there is more
+   below" — and it hid the pairing code under it. The panel scrolls instead
+   (see .sync-pop), so a row is either fully there or scrolled to. */
+.sync-pop .place:hover{border-color:var(--accent)}
+/* A place in a book this device does not have. Shown, because it is how you
+   find out the other device is reading something you have not brought over —
+   and plainly not pressable, because it is not. */
+.sync-pop .place.gone{opacity:.55;cursor:default}
+.sync-pop .place.gone:hover{border-color:var(--hair)}
+/* The timecode is the thing you are choosing, so it takes the accent and the
+   typing face; everything else about the row is context. min-width:0 on the
+   sub is what lets a long title ellipsize instead of widening the panel. */
+.sync-pop .place-at{
+  font-family:var(--data);font-size:12.5px;color:var(--accent);
+  /* Eight characters of the monospace face, so 1:10:00 and 10:50:02 reserve
+     the same box and every row's second column starts at the same x. Without
+     it the list is ragged by exactly one digit, which is what a column of
+     timecodes must never be. */
+  min-width:8ch;
+}
+/* Right against the panel's own column, so the ages line up down the list
+   whatever the timecodes are doing. */
+.sync-pop .place-ago{
+  font-family:var(--ui);font-size:11px;color:var(--muted);letter-spacing:var(--track-ui);
+  justify-self:end;align-self:baseline;white-space:nowrap;
+}
+.sync-pop .place-by{
+  grid-column:1 / -1;
+  font-family:var(--ui);font-size:11.5px;color:var(--dust,var(--muted));
+  letter-spacing:var(--track-ui);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* The pairing code, on the panel's own rhythm. It used to borrow the Export
+   drawer's .sent-when/.share-code, which are built for a 384px drawer row:
+   they carry 10px of side padding, so the code sat inset past the buttons and
+   broke the one left edge the panel is measured to keep, and .share-code's
+   16px bottom margin landed on top of the panel's own padding — the thing the
+   whole "spacing hangs above a group" rule exists to prevent.
+   Baseline-aligned rather than centred, so a 16px code and an 11.5px
+   countdown sit on one line rather than one floating against the other. */
+/* .sync-pop-scoped, and that is load-bearing: .sync-pop p{margin:0} is 0,1,1
+   against a bare .pair-code's 0,1,0, so the 14px never applied whatever the
+   order and the code sat flush against the button row. Measured at 0px of
+   gap before this. */
+.sync-pop .pair-code{
+  margin:14px 0 0;display:flex;align-items:baseline;gap:7px;
+  font-family:var(--data);font-size:16px;color:var(--accent);letter-spacing:.08em;
+}
+.pair-code #syncPairCode{user-select:all;cursor:pointer}
+.pair-code #syncPairCode:hover{filter:brightness(1.18)}
+/* Not selectable: it is not part of what you type on the other device, and a
+   drag across the line should hand over the code alone. */
+.pair-left{
+  font-family:var(--ui);font-size:11.5px;color:var(--muted);
+  letter-spacing:var(--track-ui);user-select:none;
+}
+
 .sync-pair{border-top:1px solid var(--hair);margin-top:14px;padding-top:12px}
 .sync-pair .sync-when{margin-top:10px}
 .sync-pair select{

@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.1.18";
+  const WEB_VERSION = "1.1.19";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -740,6 +740,27 @@
   const saveSync = s => localStorage.setItem(SYNC_KEY, JSON.stringify(s));
   const deviceName = () => (syncState().device || "").trim() || "This device";
 
+  /* Every recent reading in the record, flattened for the panel — the web
+     reader's half of sync_places() in app.py. All three have to agree: they
+     render through the same placesHtml(). An entry written before places
+     existed carries exactly one reading and is read as a one-pin list,
+     because the record is an interface and its writers are in the wild. */
+  function placesOf(mirror, slots, me) {
+    const rows = [];
+    for (const slot of Object.keys(mirror || {})) {
+      const e = mirror[slot] || {}, b = slots[slot];
+      const pins = Array.isArray(e.places) && e.places.length
+        ? e.places : [{ pos: e.pos, at: e.at, by: e.by }];
+      for (const pin of pins)
+        rows.push({ slot, bid: b ? b.id : null,
+                    title: (b && b.title) || e.name || "A book",
+                    pos: +(pin.pos || 0), at: +(pin.at || 0), by: pin.by || "",
+                    mine: (pin.by || "") === me });
+    }
+    rows.sort((a, c) => c.at - a.at);
+    return rows.slice(0, 30);
+  }
+
   /* The Worker hands out 26 Crockford characters already, so a code is just
      those grouped in fours — same shape as before, and the same alphabet,
      so a code still forgives a typed O for 0. */
@@ -816,6 +837,10 @@
       return { code: s.id ? syncCode(s.id) : null, device: s.device || "",
                last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
                dirty: !!s.id && dirty, books: books.length,
+               others: s.others || {},
+               // From the mirror, so the panel has the list the moment it
+               // opens rather than only after a sync.
+               places: placesOf(s.mirror, slots, deviceName()),
                shared: Object.keys(s.mirror || {}).length };
     }
     if (rest === "name" && post) {
@@ -958,7 +983,8 @@
                    .map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
       });
       return { ok: true, last: s.last, by: s.lastBy, pulled, pushed,
-               pulledIds, others: s.others, unmatched };
+               pulledIds, others: s.others,
+               places: placesOf(remote, slots, who), unmatched };
     }
     return { error: "The web reader has no /api/sync/" + rest + "." };
   }

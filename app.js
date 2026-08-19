@@ -243,7 +243,11 @@ async function loadBook(id, startAt = "last") {
   drawTicks();
   updateSubtitle();
 
-  const t = startAt === "start" ? 0
+  /* A number opens the book there — that is what a place row hands over.
+     "start" and "bookmark" are the Library picker's two words, and anything
+     else means the saved position. */
+  const t = typeof startAt === "number" ? Math.max(0, startAt)
+    : startAt === "start" ? 0
     : startAt === "bookmark" && b.bookmark != null ? b.bookmark
     : (b.position || 0);
   renderBook(t);
@@ -3877,17 +3881,84 @@ function syncWhenLine(s) {
 
 function syncCountLine(s) {
   if (s.shared === undefined) return "";
-  return s.shared
-    ? `Sharing ${s.shared} book${s.shared === 1 ? "" : "s"} with your other devices.`
-    : "Nothing shared yet — press sync, or check the other device is on this same code.";
+  if (!s.shared)
+    return "Nothing shared yet — press sync, or check the other device is on this same code.";
+  const books = `${s.shared} book${s.shared === 1 ? "" : "s"}`;
+  /* The sentence this replaces said "sharing N books with your other
+     devices" whether or not any other device had ever written — and the
+     owner's record held ten entries, every one of them this machine's, while
+     the panel said exactly that for weeks. A record only this device has
+     touched now says so, which is the difference between sync being broken
+     and the two devices never having been paired at all. */
+  return (s.places || []).some(p => !p.mine)
+    ? `Sharing ${books} with your other devices.`
+    : `Sharing ${books}. No other device has synced with this code yet.`;
+}
+
+/* How long ago, short enough to sit at the end of a row. syncWhen() is the
+   long form and belongs on the one status line that has the width for it. */
+function syncAgo(t) {
+  if (!t) return "";
+  const s = Math.max(0, Date.now() / 1000 - t);
+  /* Terse on purpose. Written out — "2 min ago" — the row overflowed at the
+     panel's 296px and the ellipsis ate the age, which is the part you are
+     reading the row for: measured as "Dreadgod · Galaxy Z Fold 7 · 2 …". */
+  if (s < 90) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  if (s < 86400 * 7) return `${Math.round(s / 86400)}d ago`;
+  return new Date(t * 1000).toLocaleDateString();
+}
+
+/* Places: every sync leaves one, and you pick which to go to.
+ *
+ * This replaces a single "Go there" button that could only ever offer the
+ * one reading the merge had settled on — so a place the merge declined to
+ * adopt, which is exactly the interesting case, had nowhere to appear. The
+ * open book's places come first because that is what you are looking at;
+ * places in other books follow, and open that book when taken. */
+const PLACE_ROWS = 5;
+
+function placesHtml(s) {
+  const all = s.places || [];
+  if (!all.length) return "";
+  const here = book ? all.filter(p => p.bid === book.id) : [];
+  const rest = all.filter(p => !book || p.bid !== book.id);
+  const rows = here.concat(rest).slice(0, PLACE_ROWS);
+  if (!rows.length) return "";
+  return `<div class="places">${rows.map(p => {
+    /* Two lines, because one could not hold it. Everything on a single row
+       — time, title, device, age — overflowed at the panel's 296px and the
+       ellipsis ate the age, which is the half you are reading the row for:
+       measured as "Dreadgod · Galaxy Z Fold 7 · 2 …". The time and the age
+       now take a line of their own, and only the line that can afford to be
+       cut is the one that can be. */
+    const sameBook = !!(book && p.bid === book.id);
+    const who = [p.by || "somewhere", sameBook ? "" : p.title]
+      .filter(Boolean).map(esc).join(" · ");
+    /* A place in a book this device does not have is still worth showing —
+       it is how you learn the other device is reading something you have not
+       brought over — but it cannot be gone to, so it says so rather than
+       offering a button that does nothing. */
+    const gone = !p.bid;
+    return `<button class="place${gone ? " gone" : ""}"${gone ? " disabled" : ""}
+              data-bid="${esc(p.bid || "")}" data-pos="${p.pos}"
+              title="${gone ? "This book is not on this device." : "Go to " + clock(p.pos)}">
+        <span class="place-at">${clock(p.pos)}</span>
+        <span class="place-ago">${esc(syncAgo(p.at))}</span>
+        <span class="place-by">${who}</span>
+      </button>`;
+  }).join("")}</div>`;
 }
 
 /* Which panel this is, rather than what it says: a code appearing or the
    record going missing changes the shape and needs a real redraw. Anything
    else is two lines of text. */
-/* theirsAt is in the shape because the "Go there" row appears and
-   disappears with it, and paintSync only redraws on a shape change. */
-const syncShape = s => `${!!s.code}|${!!s.lost}|${theirsAt != null}`;
+/* Whether there are places at all is a shape change — the block appears and
+   disappears with it. Their *contents* are not: paintSync rewrites those in
+   place, the same as the two status lines, so a sync that lands while the
+   panel is open does not flicker the whole panel. */
+const syncShape = s => `${!!s.code}|${!!s.lost}|${((s.places || []).length > 0)}`;
 let syncDrawn = "";
 
 function paintSync() {
@@ -3898,6 +3969,8 @@ function paintSync() {
   if (w) w.innerHTML = syncWhenLine(syncInfo);
   const c = pop.querySelector(".sync-count");
   if (c) c.textContent = syncCountLine(syncInfo);
+  const pl = pop.querySelector(".places");
+  if (pl) pl.outerHTML = placesHtml(syncInfo) || "";
 }
 
 function syncPopHtml() {
@@ -3944,9 +4017,11 @@ function syncPopHtml() {
          </div>`}
     <!-- "Your code" and the code are one thing, so they sit tight together
          and the group they form keeps its distance from the buttons above. -->
-    ${theirsAt != null ? `
-    <p class="sync-count">${esc(theirsBy || "Your other device")} is at ${clock(theirsAt)}</p>
-    <div class="sync-row"><button class="btn ghost" id="syncGoThere">Go there</button></div>` : ""}
+    <!-- One "Go there" button could only ever offer the single reading the
+         merge had settled on. The list offers every recent one, each naming
+         the device that left it — which is also the only thing that has ever
+         made "is my other device actually here?" answerable. -->
+    ${placesHtml(s)}
     <!-- Six characters, and nothing else on show.
          The twenty-six character id is still what identifies the record and
          still what a device stores, but it is no longer displayed: it is not
@@ -3954,9 +4029,15 @@ function syncPopHtml() {
          only invited the question of which one to use. The short code lasts
          ten minutes, which is long enough to walk to another device and far
          too short to be worth guessing. -->
+    <!-- The code and the time it has left are one line and carry no
+         sentence. "Type this on the other device" explained a code sitting
+         in a panel about keeping two devices in step, which is the one place
+         it needed no explaining — and at 296px it wrapped, pushing the
+         countdown onto a line of its own. -->
     <div id="syncPairBox" hidden>
-      <p class="sent-when" id="syncPairWhen"></p>
-      <p class="share-code" id="syncPairCode"></p>
+      <p class="pair-code">
+        <span id="syncPairCode"></span><span class="pair-left" id="syncPairLeft"></span>
+      </p>
     </div>
     <div id="syncPairs"></div>`;
 }
@@ -3966,10 +4047,18 @@ function syncPopHtml() {
    works, and the reader would type it and be told they got it wrong. */
 let pairTick = null;
 function showPairCode(code, ttl) {
-  const box = $("syncPairBox"), when = $("syncPairWhen"), out = $("syncPairCode");
+  const box = $("syncPairBox"), out = $("syncPairCode"), rest = $("syncPairLeft");
   if (!box || !code) return;
   out.textContent = code;
   box.hidden = false;
+  /* It looks pressable, so it has to be pressable. The code carried
+     .share-code's cursor and hover brightness and no handler at all, which
+     is the same shape of bug as "I have one" never being wired: a control
+     that renders is not a control that works. */
+  out.onclick = async () => {
+    try { await navigator.clipboard.writeText(code); toast("Code copied."); }
+    catch { toast("Select the code and copy it."); }
+  };
   let left = ttl;
   clearInterval(pairTick);
   const paint = () => {
@@ -3980,7 +4069,7 @@ function showPairCode(code, ttl) {
       return toast("That pairing code has expired. Make another.");
     }
     const m = Math.floor(left / 60), s = left % 60;
-    when.textContent = `Type this on the other device — ${m}:${String(s).padStart(2, "0")} left`;
+    rest.textContent = `— ${m}:${String(s).padStart(2, "0")} left`;
     left -= 1;
   };
   paint();
@@ -4007,13 +4096,32 @@ function openSyncPop() {
      snapped you there, but when your own position is further on the merge
      correctly refuses to pull — so nothing moved, and the only way across
      was to find a single green word that could be hours off-screen. */
-  $("syncGoThere")?.addEventListener("click", () => {
-    if (theirsAt == null) return;
-    const at = theirsAt;
-    playFrom(at);
-    closeSyncPop();
-    toast(`Moved to ${clock(at)} — where ${theirsBy || "your other device"} left off.`);
-  });
+  /* Delegated, because paintSync rewrites these rows in place whenever a
+     sync lands — a listener bound to each button would be pointing at
+     detached nodes the moment that happened.
+     
+     Bound once, because #syncPop is *not* one of the nodes that gets
+     rewritten: openSyncPop replaces its innerHTML but the panel element
+     itself lives for the life of the page, so adding the listener on every
+     open stacked them. Measured: three opens, one click, three jumps and
+     three toasts. Every other handler here is on a child that innerHTML has
+     just recreated, which is why this is the only one that needed it. */
+  if (!pop.dataset.placesBound) {
+    pop.dataset.placesBound = "1";
+    pop.addEventListener("click", async e => {
+      const row = e.target.closest(".place");
+      if (!row || row.disabled) return;
+      const bid = row.dataset.bid, pos = Number(row.dataset.pos) || 0;
+      closeSyncPop();
+      if (book && book.id === bid) {
+        playFrom(pos);
+        toast(`Moved to ${clock(pos)}.`);
+      } else {
+        await loadBook(bid, pos);
+        toast(`Opened at ${clock(pos)}.`);
+      }
+    });
+  }
 
   /* The code is simply there when the panel is open — no button to press for
      it. It is fetched on open rather than kept, because it expires: a code
@@ -4279,6 +4387,26 @@ const lsSync = () => { try { return JSON.parse(localStorage.getItem(SYNC_LS)) ||
 const lsSave = s => localStorage.setItem(SYNC_LS, JSON.stringify(s));
 const lsDevice = () => (lsSync().device || "").trim() || "This device";
 
+/* Every recent reading in the record, flattened for the panel — this side's
+   half of sync_places() in app.py, and it has to agree with it: both render
+   through the same placesHtml(). An entry written before places existed
+   carries exactly one reading and is read as a one-pin list, because the
+   record is an interface and its writers are in the wild. */
+function lsPlaces(mirror, slots, me) {
+  const rows = [];
+  for (const slot of Object.keys(mirror || {})) {
+    const e = mirror[slot] || {}, b = slots[slot];
+    const pins = Array.isArray(e.places) && e.places.length
+      ? e.places : [{ pos: e.pos, at: e.at, by: e.by }];
+    for (const p of pins)
+      rows.push({ slot, bid: b ? b.id : null, title: (b && b.title) || e.name || "A book",
+                  pos: +(p.pos || 0), at: +(p.at || 0), by: p.by || "",
+                  mine: (p.by || "") === me });
+  }
+  rows.sort((a, c) => c.at - a.at);
+  return rows.slice(0, 30);
+}
+
 // The Worker hands out 26 Crockford base32 characters already, so a code is
 // just those grouped in fours. You type it once per device, by hand.
 const lsCode = id => (id || "").match(/.{1,4}/g).join("-");
@@ -4348,6 +4476,11 @@ async function localSync(path, body) {
     return { code: s.id ? lsCode(s.id) : null, device: s.device || "",
              last: s.last || 0, lastBy: s.lastBy || "", lost: !!s.lost,
              dirty: !!s.id && dirty, books: shelf.length,
+             others: s.others || {},
+             // Built from the mirror, which is the record as this device last
+             // saw it — so the list is there the moment the panel opens and
+             // never waits on a sync to have something to show.
+             places: lsPlaces(s.mirror, slots, lsDevice()),
              // from the mirror, so the phone can say it too — zero here on a
              // device that has pushed books is two devices on two codes
              shared: Object.keys(s.mirror || {}).length };
@@ -4500,7 +4633,8 @@ async function localSync(path, body) {
                  .slice(0, 4).map(b => ({ id: b.id, title: b.title, duration: b.duration })) };
     });
     return { ok: true, last: s.last, by: s.lastBy, pulled, pushed,
-             pulledIds, others: s.others, unmatched };
+             pulledIds, others: s.others,
+             places: lsPlaces(remote, slots, who), unmatched };
   }
   return { error: "No such sync route." };
 }
