@@ -1,4 +1,54 @@
 const $ = id => document.getElementById(id);
+
+/* ---- preferences that outlive the origin (Android only) -----------------
+ *
+ * `localStorage` is partitioned by origin, and on the phone the origin is
+ * `http://127.0.0.1:<port>` with the port coming from `ServerSocket(0, ...)`
+ * — a fresh one on every launch. So the page opened each time to an empty
+ * store and the phone forgot the sync code it had joined, what it calls
+ * itself, its theme, and which series were folded shut. Reported as having
+ * to type the code in on the phone every time.
+ *
+ * The fix is not to stop using localStorage — every call site in this file,
+ * and in the two copies that share it, would have to change and the desktop
+ * and the web reader have no such problem, their origins being stable. It is
+ * to hydrate localStorage from a native store at startup and mirror writes
+ * back into it. Where the bridge is absent (desktop, web reader, an APK
+ * older than this) nothing happens at all and localStorage behaves exactly
+ * as it always has.
+ *
+ * Runs before anything reads a preference, which is why it is at the top of
+ * the file rather than beside the sync code that needed it. */
+(() => {
+  const n = window.SpineNative;
+  if (!n || !n.prefAll || !n.prefSet) return;
+  try {
+    const saved = JSON.parse(n.prefAll() || "{}");
+    for (const k of Object.keys(saved)) {
+      // The native store is the survivor, so it wins: anything in this
+      // origin's localStorage is from a port we will never see again.
+      localStorage.setItem(k, saved[k]);
+    }
+  } catch (e) { /* a corrupt store is not worth failing the launch over */ }
+
+  const set = Storage.prototype.setItem, del = Storage.prototype.removeItem,
+        clr = Storage.prototype.clear;
+  /* Guarded on `this === localStorage`: sessionStorage shares this prototype
+     and is deliberately per-session. */
+  Storage.prototype.setItem = function (k, v) {
+    set.call(this, k, v);
+    if (this === localStorage) { try { n.prefSet(String(k), String(v)); } catch (e) {} }
+  };
+  Storage.prototype.removeItem = function (k) {
+    del.call(this, k);
+    if (this === localStorage) { try { n.prefDel(String(k)); } catch (e) {} }
+  };
+  Storage.prototype.clear = function () {
+    const keys = this === localStorage ? Object.keys(localStorage) : [];
+    clr.call(this);
+    for (const k of keys) { try { n.prefDel(k); } catch (e) {} }
+  };
+})();
 const audio = $("audio");
 
 const PAGE_SECONDS = 12 * 60;   // long chapters get split so the DOM stays light
