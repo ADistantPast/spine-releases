@@ -2038,7 +2038,14 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
    *
    * Scoped .bar, matching the placement rule above it: a bare .sync-btn here
    * loses to the wide-layout .bar .sync-btn further down the file, which is the
-   * trap this same pill has already been caught by twice. */
+   * trap this same pill has already been caught by twice.
+   *
+   * And nested inside `(pointer: coarse)`, because the query this block lives
+   * in also fires for a *desktop window dragged narrow* — which is still a
+   * window with a mouse and room for a word. Reported with a screenshot of
+   * exactly that. "On mobile the sync icon digs into the text" is about a
+   * touchscreen, so that is what this asks for. */
+  @media (pointer: coarse) {
   /* `.bar .sync .sync-btn`, not `.bar .sync-btn`. These copies write their
      media queries unscoped, and there is a plain `.bar .sync-btn{padding:0
      14px}` further down the file — same 0,2,0, so the later one wins and the
@@ -2053,6 +2060,7 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   /* Bigger, because it is now the whole control rather than an indicator
      beside a word. */
   .bar .sync .sync-led{width:10px;height:10px}
+  }
 }
 
 /* ---- numbers -----------------------------------------------------------
@@ -2403,13 +2411,17 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
    of five wearing smaller type reads as a mistake, and at the one width where
    the smallest step was needed it measured *wider* than not stepping at all. */
 .bar.rowed .segbar{flex:1 0 100%;justify-content:space-between}
-/* And if it will not fit even with the whole row, the segments wrap onto a
-   second line rather than shrinking or hanging off the edge. Where there is
-   room nothing wraps, so this costs nothing at a width that fits — it is only
-   the floor under "never shrink the type": on a 320px cover screen the labels
-   need about 281px against 244 available, which is exactly the case the old
-   11px step existed for. */
-.segbar{flex-wrap:wrap;row-gap:3px}
+/* Wrapping is the last resort *inside* a pill that already has the whole row,
+   and nowhere else.
+ *
+ * Written unconditionally first, and that was wrong in a way no measurement
+ * without a book open could show: the pill is a flex item that shrinks when
+ * the title beside it is long, so at any width where the bar is still one row
+ * the segments wrapped to two lines instead of squeezing — and because they
+ * wrapped, segbarSpills() saw no overflow and never gave the pill its own
+ * row. Reported with a screenshot; reproduced at every width from 1180 to
+ * 1500 with a real book title in the bar, and at none of them without one. */
+.bar.rowed .segbar{flex-wrap:wrap;row-gap:3px}
 .bar.rowed .seg-ind{display:none}
 .bar.rowed .seg-btn{flex:1 1 0;text-align:center}
 .bar.rowed .seg-btn.on{background:var(--panel-2)}

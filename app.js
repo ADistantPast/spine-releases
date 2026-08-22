@@ -2326,6 +2326,16 @@ $("jumpNow").onclick = () => snapToPlayhead();
  * than pretending. */
 function reconcilePlayback() {
   if (!book) return;
+  /* One line, into the log, every time the app comes back. With the page's
+     console now reaching logcat this is what turns "it was stuck again" into
+     a diagnosis: whether the element was paused, whether we thought it should
+     be playing, how far in it was, and whether the media had even loaded. */
+  try {
+    console.log(`[resume] paused=${audio.paused} want=${wantPlaying}` +
+      ` t=${audio.currentTime.toFixed(1)} ready=${audio.readyState}` +
+      ` err=${audio.error ? audio.error.code : "none"}` +
+      ` loopIdleMs=${Math.round(performance.now() - lastFrameAt)}`);
+  } catch (e) { /* never let a log line break the recovery */ }
   if (performance.now() - lastFrameAt > 1000) {
     frameGen += 1;
     frameFailed = false;
