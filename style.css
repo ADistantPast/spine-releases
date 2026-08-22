@@ -2396,8 +2396,23 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * where the unstepped bar needed 281.1. A step that makes it worse at the one
  * width with no room is not a step. Nothing here may be larger than what any
  * layout already sets, and font-size is the only property that is safe. */
-.segbar.tight .seg-btn{font-size:12px}
-.segbar.tighter .seg-btn{font-size:11px;letter-spacing:0}
+/* The bar gives the pill its own row rather than shrinking its type. Same
+   arrangement the narrow layout uses, reached by measuring instead of by
+   guessing a width — see fitSegbar(). The two steps that used to live here
+   (12px, then 11px with the tracking removed) are gone: one control in a row
+   of five wearing smaller type reads as a mistake, and at the one width where
+   the smallest step was needed it measured *wider* than not stepping at all. */
+.bar.rowed .segbar{flex:1 0 100%;justify-content:space-between}
+/* And if it will not fit even with the whole row, the segments wrap onto a
+   second line rather than shrinking or hanging off the edge. Where there is
+   room nothing wraps, so this costs nothing at a width that fits — it is only
+   the floor under "never shrink the type": on a 320px cover screen the labels
+   need about 281px against 244 available, which is exactly the case the old
+   11px step existed for. */
+.segbar{flex-wrap:wrap;row-gap:3px}
+.bar.rowed .seg-ind{display:none}
+.bar.rowed .seg-btn{flex:1 1 0;text-align:center}
+.bar.rowed .seg-btn.on{background:var(--panel-2)}
 
 /* ---- the play glyph scales with its button ------------------------------
  * The transport icons are filled in from constants that carry width="14",

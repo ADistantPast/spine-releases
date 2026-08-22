@@ -15,11 +15,18 @@
    network — and it means a stale cache is served forever until the cache
    name changes. This bit us repeatedly while building: edits appeared to do
    nothing because the worker kept handing back the old file. */
-const VERSION = "spine-web-1.1.22";   // keep in step with WEB_VERSION in shelf.js
+const VERSION = "spine-web-1.1.23";   // keep in step with WEB_VERSION in shelf.js
 const SHELL = [
   ".", "index.html", "app.js", "shelf.js", "open.js", "style.css",
-  "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-1024.png",
-  "icon-180.png",
+  "manifest.webmanifest",
+  /* Versioned URLs. An installed PWA keeps the icon it was installed with,
+     and Chrome will not re-fetch an icon whose URL has not changed — so a
+     redrawn logo went on showing the old mark when the app was installed
+     again. Reported exactly that way. The query is the cheapest thing that
+     makes it a different URL; bump it with the release when an icon
+     changes. */
+  "icon-192.png?v=1.1.23", "icon-512.png?v=1.1.23", "icon-1024.png?v=1.1.23",
+  "icon-180.png?v=1.1.23",
 ];
 
 /* ---------------------------------------------------------------- audio
