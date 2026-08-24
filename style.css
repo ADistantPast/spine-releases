@@ -1510,8 +1510,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
      move in, which is why this is padding on the bar and not on the whole
      app. Insetting .app would leave a dead band under a bar whose whole
      job is to sit against the bottom of the screen. */
+  /* 22px, the same inset the bar uses at this width — it was 14, so the row
+     of buttons sat closer to the edge than the title above it. */
   .transport{flex-wrap:wrap;justify-content:center;gap:8px;
-    padding:2px calc(14px + var(--safe-r)) calc(12px + var(--safe-b)) calc(14px + var(--safe-l))}
+    padding:2px calc(22px + var(--safe-r)) calc(12px + var(--safe-b)) calc(22px + var(--safe-l))}
   /* The headroom the chapter numbers need is already provided by the grab
      handle's row here, unlike the desktop's single-line bar — so the generous
      symmetric padding added for that would just make the tray tall. */
@@ -2081,6 +2083,13 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
   font-variant-numeric:tabular-nums;
 }
 .clock,.tick-n{font-family:var(--num);letter-spacing:.01em}
+/* Both clocks reserve the same width, so the scrub track between them is
+   centred. "5:33:20" is narrower than "16:13:29", and the track inherited
+   the difference: measured 70px from the left edge against 78px from the
+   right, at every window size. Eight characters is the widest a book gets. */
+.clock{min-width:8ch}
+#clockNow{text-align:left}
+#clockEnd{text-align:right}
 /* The transport's labels are words — Speed, Timer, Mark — so they belong to
    the interface face. It was all set in the monospace, which is the single
    biggest reason the strip read as a different app from the bar. */
