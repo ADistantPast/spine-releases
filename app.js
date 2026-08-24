@@ -948,6 +948,25 @@ function centreLyric(behavior) {
  * the layout is the only honest test. 11px is the floor and it fits five
  * words inside a Fold's cover screen.
  */
+/* Is the book's name being cut off to make room? In the stacked shape the
+   title has a line to itself and cannot be, so this only ever refuses the
+   one-row shape. */
+function titleClipped() {
+  const h = $("title");
+  if (!h || !h.offsetParent) return false;
+  return h.scrollWidth > h.clientWidth + 1;
+}
+
+/* Do the controls reach past the bar's own padding? The pill is the last of
+   them, so this catches the case where the row holds together only by running
+   off the edge of the window. */
+function toolsSpill() {
+  const bar = $("bar"), tools = bar && bar.querySelector(".bar-tools");
+  if (!bar || !tools) return false;
+  const pad = parseFloat(getComputedStyle(bar).paddingRight) || 0;
+  return tools.getBoundingClientRect().right > bar.getBoundingClientRect().right - pad + 1;
+}
+
 function segbarSpills() {
   const bar = $("bar"), sb = $("segbar");
   if (!bar || !sb || !sb.offsetParent) return false;       // hidden: nothing to fit
@@ -1015,8 +1034,30 @@ function fitSegbar() {
    * does, reached by measurement instead of by width. */
   const bar = $("bar");
   sb.classList.remove("tight", "tighter");
-  bar?.classList.remove("rowed");
-  if (segbarSpills()) bar?.classList.add("rowed");
+  /* Try the one-row shape and keep it only if everything really fits.
+   *
+   * The stylesheet stacks by default, so this is a promotion rather than a
+   * rescue — if the measurement below is ever missed, what is left on screen
+   * is the stacked shape rather than a squeezed one. That inversion is the
+   * whole fix: four attempts at this control failed because the good shape
+   * was the default and the rescue had to fire.
+   *
+   * Three things have to hold, and the title is one of them: the one-row
+   * shape steals the title's width, and a title cut to "Carl's Doomsday
+   * Scenario Dungeon Craw…" beside a boxed-in pill is exactly the screenshot
+   * that was rejected. */
+  if (!bar) return;
+  /* Measure the one-row shape, then keep it only if it really fits.
+   *
+   * The stacked class comes off first so the measurement is of the wide shape
+   * — asking whether the segments have room while they are already spread
+   * across their own row would always answer yes.
+   *
+   * Three things have to hold, and the title is one of them: the wide shape
+   * takes the title's width, and "Carl's Doomsday Scenario Dungeon Craw…"
+   * beside a boxed-in pill is exactly the screenshot that was turned down. */
+  bar.classList.remove("stacked");
+  if (segbarSpills() || titleClipped() || toolsSpill()) bar.classList.add("stacked");
   /* The block is measured from a segment's width, so it is repainted here
      rather than left to the resize listener — the two cannot then get into the
      wrong order. Unconditionally, not only when a step changed: the segments

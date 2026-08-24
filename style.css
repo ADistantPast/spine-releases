@@ -2413,35 +2413,35 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * row, and the tools row is allowed to wrap, so the pill drops to a line of
  * its own instead of being crushed. The JS then spreads it across that line.
  * Belt and braces on purpose: the reader saw the squeezed state three times. */
-.segbar{flex-shrink:0}
-.bar-tools{flex-wrap:wrap;row-gap:8px}
-
-/* The bar gives the pill its own row rather than shrinking its type. Same
-   arrangement the narrow layout uses, reached by measuring instead of by
-   guessing a width — see fitSegbar(). The two steps that used to live here
-   (12px, then 11px with the tracking removed) are gone: one control in a row
-   of five wearing smaller type reads as a mistake, and at the one width where
-   the smallest step was needed it measured *wider* than not stepping at all. */
-/* The pill takes a line of its own *inside the tools*, which means the tools
-   have to be allowed to wrap — without this the pill's 100% basis simply ate
-   the row it was sharing and squeezed the search box to a 30px stub, measured
-   at 1200-1400 with a book title in the bar. */
-.bar.rowed .bar-tools{flex-wrap:wrap;row-gap:8px}
-.bar.rowed .segbar{flex:1 0 100%;justify-content:space-between}
-/* Wrapping is the last resort *inside* a pill that already has the whole row,
-   and nowhere else.
+/* ---- two shapes, and the wide one has to fit to keep it -----------------
  *
- * Written unconditionally first, and that was wrong in a way no measurement
- * without a book open could show: the pill is a flex item that shrinks when
- * the title beside it is long, so at any width where the bar is still one row
- * the segments wrapped to two lines instead of squeezing — and because they
- * wrapped, segbarSpills() saw no overflow and never gave the pill its own
- * row. Reported with a screenshot; reproduced at every width from 1180 to
- * 1500 with a real book title in the bar, and at none of them without one. */
-.bar.rowed .segbar{flex-wrap:wrap;row-gap:3px}
-.bar.rowed .seg-ind{display:none}
-.bar.rowed .seg-btn{flex:1 1 0;text-align:center}
-.bar.rowed .seg-btn.on{background:var(--panel-2)}
+ * Reported four times, each time a screenshot of a *third* shape: the labels
+ * stepped down a size, wrapped inside the pill, squeezed until they touched,
+ * or the pill dropped to a second line but boxed into the tools column with
+ * the title cut short beside it. The owner settled it with two pictures: the
+ * full one-row bar where everything fits, and the stacked one where it does
+ * not.
+ *
+ * The stacked shape already existed — it is what `@media (max-width:1160px)`
+ * above does, and it is the picture that was approved. So this is not a new
+ * layout, it is that same arrangement made reachable by *measurement* rather
+ * than by width alone, because whether one row fits depends on the length of
+ * the book's title and no breakpoint can know that.
+ *
+ * Kept in step with the 1160 block by hand. Two rules doing the same job is
+ * how the two drift apart, but the alternative — a media query that also
+ * responds to a class — does not exist. */
+.bar.stacked{flex-wrap:wrap;row-gap:10px;align-items:center}
+.bar.stacked .bar-title{flex:1 1 100%;min-width:0}
+.bar.stacked .bar-tools{flex:1 1 100%;flex-wrap:wrap;row-gap:8px;
+  justify-content:flex-start}
+.bar.stacked #btnOpen{order:1;flex:0 0 auto}
+.bar.stacked .find{order:2;flex:1 1 150px;min-width:0}
+.bar.stacked .find input{width:100%}
+.bar.stacked .sync{order:3}
+.bar.stacked .theme-btn{order:4}
+.bar.stacked .segbar{order:5;flex:1 1 100%}
+.bar.stacked .seg-btn{flex:1 1 0}
 
 /* ---- the play glyph scales with its button ------------------------------
  * The transport icons are filled in from constants that carry width="14",
