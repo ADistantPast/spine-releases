@@ -946,13 +946,40 @@ function centreLyric(behavior) {
 function segbarSpills() {
   const bar = $("bar"), sb = $("segbar");
   if (!bar || !sb || !sb.offsetParent) return false;       // hidden: nothing to fit
-  /* Asked of the segments themselves, one at a time. A seg-btn carries
-     min-width:0, which removes the min-content floor a flex item would
-     otherwise have — so a squeezed segment does not push the pill wider, it
-     keeps its box and lets the label hang out of it. That is the screenshot:
-     "Import" sitting on the pill's own rounded edge. */
-  for (const b of sb.querySelectorAll(".seg-btn"))
-    if (b.scrollWidth > b.clientWidth + 1) return true;
+  /* Does the pill have room for its labels at their own size?
+   *
+   * Asked by adding up what the segments *need* — the width of each label's
+   * text plus that segment's own padding, plus the gaps and the pill's
+   * padding — and comparing it with the width the pill actually has.
+   *
+   * Two earlier versions of this asked the wrong question and both shipped:
+   *
+   * - `scrollWidth > clientWidth` per segment. A seg-btn carries
+   *   `min-width:0`, so a squeezed segment's *box shrinks with its text* and
+   *   nothing ever reports overflow. That is the screenshot where the labels
+   *   read "LibraryChapters Notes" with no space between them: cramped to
+   *   nothing, and the test said everything was fine.
+   * - Measuring the text against the segment's own box has the same flaw for
+   *   the same reason. It has to be measured against the space available.
+   *
+   * A `Range` over the label is what gives the text's real width, and it is
+   * the only honest instrument here — the same reason fitBarButtons counts
+   * line boxes with one rather than trusting a height. */
+  const segs = [...sb.querySelectorAll(".seg-btn")];
+  if (segs.length) {
+    const cs = getComputedStyle(sb);
+    const gap = parseFloat(cs.columnGap) || 0;
+    let need = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+             + gap * (segs.length - 1);
+    const range = document.createRange();
+    for (const b of segs) {
+      const bs = getComputedStyle(b);
+      range.selectNodeContents(b);
+      need += range.getBoundingClientRect().width
+            + (parseFloat(bs.paddingLeft) || 0) + (parseFloat(bs.paddingRight) || 0);
+    }
+    if (need > sb.getBoundingClientRect().width + 0.5) return true;
+  }
   /* And the other half: the pill fits its labels but has grown into the bar's
      padding, so it ends flush against the window instead of inset from it.
 
