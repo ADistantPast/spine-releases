@@ -74,7 +74,7 @@ Untick it whenever you want the space back; your place and notes stay.
 
 | | |
 |---|---|
-| **Windows** | `Spine-Installer-<version>.exe` from [the latest release](../../releases/latest) — about 1 GB |
+| **Windows** | `Spine-Installer-<version>.exe` from [the newest release that has one](../../releases) — about 1 GB. Most releases only change the interface and update in place, so they carry no installer; any recent one installs, and Spine brings itself up to date on its next launch. |
 | **Android** | [**Spine-latest.apk**](../../releases/latest/download/Spine-latest.apk) — a link that always points at the newest build |
 
 Those badges read the release list directly, so the version above is always
