@@ -299,7 +299,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 
 /* ---------------------------------------------------------- reader */
 
-.reader{flex:1;overflow-y:auto;scroll-behavior:smooth;outline:none}
+.reader{
+  flex:1;overflow-y:auto;scroll-behavior:smooth;outline:none;
+  /* Reserve the scrollbar's width on *both* sides, so the reading column is
+     centred in the window rather than in what is left of it.
+     The scrollbar is 16px and takes its space from the right only, so a
+     centred max-width column sat 16px left of centre at every width. Harmless
+     at 1500px (371 against 387) and obvious in a small window: measured at
+     695px the text was 28px from the left edge and 44px from the right.
+     Reported as the text not keeping to its padding once the window is made
+     small. */
+  scrollbar-gutter:stable both-edges;
+}
 /* A little chunkier than the desktop's 16px: on a phone this is the main way
    to move through an 8-hour book by thumb. It was 24px and full --dust,
    which read as a bright bar painted down the edge of the page competing
