@@ -269,6 +269,11 @@ async function loadBook(id, startAt = "last") {
   $("blank").hidden = true;
   $("transport").hidden = false;
   positionJump();
+  /* A long title takes room from the tools row, so the segments have to be
+     re-asked whether they still fit — the desktop copy learned this the hard
+     way: it re-fitted the buttons here and not the pill, so opening a book
+     left the labels squeezed until something resized the window. */
+  fitSegbar();
   /* Only ever a real source. Assigning "" makes the browser resolve it
      against the page URL, fetch the HTML, fail to decode it and fire
      onerror — which reports "this file will not play". So a book waiting for
@@ -3733,6 +3738,8 @@ $("title").ondblclick = () => {
   document.getSelection().selectAllChildren(h);
 };
 $("title").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } };
+/* Renaming changes the title's width, so the bar has to be re-fitted for the
+   same reason loadBook does it. */
 $("title").onblur = async e => {
   if (cancellingTitle) return;     // three clicks backing out of the rename
   e.target.contentEditable = "false";

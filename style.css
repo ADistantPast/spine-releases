@@ -2404,6 +2404,18 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * where the unstepped bar needed 281.1. A step that makes it worse at the one
  * width with no room is not a step. Nothing here may be larger than what any
  * layout already sets, and font-size is the only property that is safe. */
+/* The pill never squeezes. Two states and no third.
+ *
+ * fitSegbar decides which one, but a decision only helps where it is asked —
+ * and it was not being asked when a book opened, which is precisely when a
+ * long title steals the pill's width. So the floor is stated in CSS as well:
+ * with flex-shrink:0 the segments keep their own size whatever else is on the
+ * row, and the tools row is allowed to wrap, so the pill drops to a line of
+ * its own instead of being crushed. The JS then spreads it across that line.
+ * Belt and braces on purpose: the reader saw the squeezed state three times. */
+.segbar{flex-shrink:0}
+.bar-tools{flex-wrap:wrap;row-gap:8px}
+
 /* The bar gives the pill its own row rather than shrinking its type. Same
    arrangement the narrow layout uses, reached by measuring instead of by
    guessing a width — see fitSegbar(). The two steps that used to live here
