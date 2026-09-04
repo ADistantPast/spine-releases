@@ -1723,8 +1723,6 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 /* A radio in a row that already knows how to be a row. The input keeps its
    native look — this is a real choice with a real default, and a hand-drawn
    one would only be a worse version of a control the OS already draws. */
-.expiry-row{display:flex;align-items:center;gap:10px;cursor:pointer}
-.expiry-row input{accent-color:var(--accent);margin:0}
 
 /* ------------------------------------------------- syncing between devices
  *

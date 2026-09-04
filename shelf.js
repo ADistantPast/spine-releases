@@ -16,7 +16,7 @@
      /api/about exactly as the desktop and the phone report theirs. There is
      no build step and no version.txt to read, so it is written here — keep
      it in step with VERSION in sw.js, which rotates the cache. */
-  const WEB_VERSION = "1.1.31";
+  const WEB_VERSION = "1.1.32";
   window.SPINE_WEB_VERSION = WEB_VERSION;
 
   const DB_NAME = "spine";
@@ -254,7 +254,7 @@
     const key = await shareKey(secret);
     const res = await fetch(fetchUrlFor(location));
     if (res.status === 404)
-      throw new Error("That code has expired, or it was typed wrong. Codes only last a few hours.");
+      throw new Error("That code has expired, or it was typed wrong. Codes last a day.");
     if (!res.ok) throw new Error(`The transfer service answered ${res.status}.`);
 
     /* Read the stream and unseal as it arrives, rather than downloading the
@@ -355,7 +355,7 @@
        leaves you something to fall back on: you picked a file, so you can
        pick it again. A book that came from a code has no file behind it —
        the audio is a Blob in memory, the tab is allowed to drop it, and the
-       only source was a URL that stops working after a few hours. Close the
+       only source was a URL that stops working after a day. Close the
        tab tomorrow and you would have the transcript, no audio, and no way
        left to get it.
 
