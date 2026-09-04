@@ -644,7 +644,19 @@ function scrollToTime(t, behavior) {
               - reader.getBoundingClientRect().top - reader.clientHeight * 0.32;
   const far = Math.abs(top - reader.scrollTop) > reader.clientHeight * 1.2;
   autoScrollUntil = performance.now() + 900;
-  reader.scrollTo({ top, behavior: behavior || "instant" });
+  /* Screens away is gone to, not travelled to — the same rule setNow()
+     already applies to the loop's own catching up. The desktop has had this
+     since the bar started browsing and it was never mirrored here, which is
+     what made "Snap to playhead" so much worse in reading mode.
+
+     Outside reading mode it looked fine, and only by accident: the settle
+     pass below runs on a far jump and scrolls instantly, cancelling the
+     animation a frame after it starts. Reading mode hides the bar and the
+     transport, so the reader is ~150px taller, so the same jump can fall
+     under the 1.2-screen threshold — no settle, and the smooth scroll is
+     left to crawl the whole way through paragraphs content-visibility has
+     not laid out yet. */
+  reader.scrollTo({ top, behavior: far ? "instant" : (behavior || "instant") });
 
   /* And again on the next frame, because the first landing is an estimate.
      .seg carries content-visibility:auto, so the paragraphs between here
@@ -2327,7 +2339,16 @@ function positionJump() {
   const tp = $("transport"), pill = $("jumpNow");
   if (!tp || !pill) return;
   const h = tp.hidden ? 0 : tp.getBoundingClientRect().height;
-  pill.style.bottom = `${Math.round(h + 18)}px`;
+  /* With no transport under it — reading mode — 18px is 18px from the
+     physical bottom edge, which on a phone is inside the gesture strip (and
+     on an iPhone the home indicator): the system takes the press before the
+     page ever sees it, and the button reads as slow or dead rather than as
+     out of reach. The transport carries --safe-b itself, so the inset is
+     only added when there is no transport there to carry it. calc() rather
+     than a measured number, so this also holds where the inset is
+     env()-derived and JS cannot read it. */
+  pill.style.bottom = h ? `${Math.round(h + 18)}px`
+                        : "calc(18px + var(--safe-b))";
 }
 if (window.ResizeObserver) new ResizeObserver(positionJump).observe($("transport"));
 window.addEventListener("resize", positionJump);
