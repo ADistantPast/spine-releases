@@ -634,6 +634,38 @@ function renderBook(jumpTo) {
   if (jumpTo !== undefined) scrollToTime(jumpTo, "instant");
 }
 
+/* Where a word should sit in the reader, as a fraction of its height.
+ *
+ * **One number, because two of them fight.** scrollToTime() aimed at 0.32 and
+ * setNow() wanted 0.40, so every deliberate jump — the snap pill, a word tap,
+ * a chapter button, a typed timecode, a bookmark — landed 8% of the viewport
+ * away from where the highlight loop wants the word. setNow() then scrolled
+ * the difference on the very next frame, smoothly, and because that scroll
+ * moves the page the frame after failed the 4px lastWordTop guard and issued
+ * another one. The page crept toward a target that kept moving.
+ *
+ * It is worse in reading mode for the reason everything is: the reader is
+ * 915px there against 588px with the bar and transport showing, so the
+ * disagreement is 73px instead of 47px.
+ *
+ * timeAtViewTop() has to use it too — it answers "what time is the reader
+ * looking at" by hit-testing the point a jump aims for, so if that point is
+ * not the point jumps aim for, scrolling and then reading the position back
+ * reports a different time than the one that put you there. */
+const READ_ANCHOR = 0.40;
+
+/* A deliberate jump owns the reader until it lands. setNow still lights each
+   word, but must not restart that smooth scroll on every spoken word. The
+   taller three-finger reading view made that competing animation more visible.
+   scrollend releases ownership early; the deadline also works on older WebViews
+   and for a no-op jump, where no scrollend event is emitted. */
+let readerJumpUntil = 0;
+$("reader").addEventListener("scrollend", () => {
+  if (!readerJumpUntil) return;
+  readerJumpUntil = 0;
+  lastWordTop = -1;
+});
+
 /* Put the moment at `t` near the top of the reader without re-rendering. */
 function scrollToTime(t, behavior) {
   const i = wordAt(t);
@@ -641,22 +673,17 @@ function scrollToTime(t, behavior) {
   if (!el) return;
   const reader = $("reader");
   const top = reader.scrollTop + el.getBoundingClientRect().top
-              - reader.getBoundingClientRect().top - reader.clientHeight * 0.32;
+              - reader.getBoundingClientRect().top - reader.clientHeight * READ_ANCHOR;
   const far = Math.abs(top - reader.scrollTop) > reader.clientHeight * 1.2;
   autoScrollUntil = performance.now() + 900;
-  /* Screens away is gone to, not travelled to — the same rule setNow()
-     already applies to the loop's own catching up. The desktop has had this
-     since the bar started browsing and it was never mirrored here, which is
-     what made "Snap to playhead" so much worse in reading mode.
-
-     Outside reading mode it looked fine, and only by accident: the settle
-     pass below runs on a far jump and scrolls instantly, cancelling the
-     animation a frame after it starts. Reading mode hides the bar and the
-     transport, so the reader is ~150px taller, so the same jump can fall
-     under the 1.2-screen threshold — no settle, and the smooth scroll is
-     left to crawl the whole way through paragraphs content-visibility has
-     not laid out yet. */
-  reader.scrollTo({ top, behavior: far ? "instant" : (behavior || "instant") });
+  readerJumpUntil = autoScrollUntil;
+  /* **Do not downgrade a far jump to "instant" here.** Tried in 1.1.31 to
+     mirror web/app.js, and it made the reading-mode snap worse on a real
+     phone — see the long note at the same spot in the Android copy. The
+     threshold reasoning behind it was measured and right; the cost of an
+     instant scroll on a 162k-span document was not, and is the part that
+     decides it. */
+  reader.scrollTo({ top, behavior: behavior || "instant" });
 
   /* And again on the next frame, because the first landing is an estimate.
      .seg carries content-visibility:auto, so the paragraphs between here
@@ -683,7 +710,7 @@ function scrollToTime(t, behavior) {
       const e2 = pw.el[Math.max(0, wordAt(t))];
       if (!e2) return;
       const again = reader.scrollTop + e2.getBoundingClientRect().top
-                    - reader.getBoundingClientRect().top - reader.clientHeight * 0.32;
+                    - reader.getBoundingClientRect().top - reader.clientHeight * READ_ANCHOR;
       if (Math.abs(again - reader.scrollTop) < 4) return;
       autoScrollUntil = performance.now() + 900;
       reader.scrollTo({ top: again, behavior: "instant" });
@@ -793,12 +820,12 @@ function setNow(i, quiet) {
     liveSeg = seg;
   }
 
-  if (!follow || quiet) return;
+  if (!follow || quiet || performance.now() < readerJumpUntil) return;
   const reader = $("reader");
   const r = el.getBoundingClientRect(), rr = reader.getBoundingClientRect();
   if (Math.abs(r.top - lastWordTop) < 4) return;   // same line, no scroll
   lastWordTop = r.top;
-  const delta = r.top - (rr.top + rr.height * 0.40);
+  const delta = r.top - (rr.top + rr.height * READ_ANCHOR);
   if (Math.abs(delta) > 8) {
     autoScrollUntil = performance.now() + 800;     // so we don't read our own
     // smooth is for line-to-line drift; catching up across screens that way
@@ -1226,10 +1253,19 @@ let lastFrameAt = 0;
 /* One generation per loop, so a restart cannot leave two running: the old
    callback sees a newer generation and stops. Two loops would double every
    scroll and every class write in frame(). */
-let frameGen = 0;
+let frameGen = 0, frameRequest = null;
+function queueFrame(gen) {
+  // Capture this generation now, not the mutable frameGen when the callback runs.
+  frameRequest = requestAnimationFrame(() => frameLoop(gen));
+}
+function restartFrameLoop() {
+  if (frameRequest !== null) cancelAnimationFrame(frameRequest);
+  frameFailed = false;
+  frameLoop(++frameGen);   // update immediately, even if the old RAF was lost
+}
 function frameLoop(gen) {
   if (gen !== frameGen) return;
-  requestAnimationFrame(() => frameLoop(gen));
+  queueFrame(gen);
   lastFrameAt = performance.now();
   try {
     frame();
@@ -1240,7 +1276,18 @@ function frameLoop(gen) {
     }
   }
 }
-requestAnimationFrame(() => frameLoop(frameGen));
+queueFrame(frameGen);
+
+/* Audio can keep running (or regain focus) without an Activity resume. Its
+   media clock is independent of RAF, so it can revive a stalled display loop.
+   Do not call play(), seek, or re-enable follow here: an interruption must not
+   steal audio focus or pull someone away from where they chose to browse. */
+function recoverPlaybackFrame() {
+  if (!book || document.hidden || audio.paused) return;
+  if (performance.now() - lastFrameAt > 1000) restartFrameLoop();
+}
+audio.addEventListener("timeupdate", recoverPlaybackFrame);
+audio.addEventListener("playing", recoverPlaybackFrame);
 
 /* ------------------------------------------------------------ timeline */
 
@@ -2238,7 +2285,7 @@ function cpOpenSafe() { return cpOpen; }
 function timeAtViewTop() {
   const reader = $("reader");
   const r = reader.getBoundingClientRect();
-  const y = r.top + r.height * 0.32;
+  const y = r.top + r.height * READ_ANCHOR;
   const x = r.left + r.width * 0.5;
   const timeOf = node => {
     const el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -2310,6 +2357,7 @@ let lastUserInput = 0;
 const markUserInput = e => {
   if (e.type === "pointermove" && !e.buttons) return;
   lastUserInput = performance.now();
+  readerJumpUntil = 0;   // a real gesture takes over from the jump
 };
 for (const ev of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart", "touchmove"])
   addEventListener(ev, markUserInput, { passive: true, capture: true });
@@ -2430,11 +2478,7 @@ function reconcilePlayback() {
       ` err=${audio.error ? audio.error.code : "none"}` +
       ` loopIdleMs=${Math.round(performance.now() - lastFrameAt)}`);
   } catch (e) { /* never let a log line break the recovery */ }
-  if (performance.now() - lastFrameAt > 1000) {
-    frameGen += 1;
-    frameFailed = false;
-    requestAnimationFrame(() => frameLoop(frameGen));
-  }
+  if (performance.now() - lastFrameAt > 1000) restartFrameLoop();
   if (wantPlaying && audio.paused && !audio.error) {
     const p = audio.play();
     if (p && p.catch) p.catch(err => {

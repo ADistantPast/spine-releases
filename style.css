@@ -821,7 +821,13 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
 .row{
   display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;
 }
-.row:hover{background:var(--panel-2)}
+/* Behind the hover query, because a tap latches :hover in a WebView and a
+   latched row stays lit after the finger has gone — drag a book down the list
+   and every row it passed over is still highlighted, which is what "it keeps
+   highlighting" was. The phone already draws .row:active for the press. */
+@media (hover:hover) and (pointer:fine){
+  .row:hover{background:var(--panel-2)}
+}
 .row-t{font-family:var(--data);font-size:11px;color:var(--muted);flex:0 0 62px}
 .row-n{flex:1;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-n[contenteditable="true"]{white-space:normal;outline:none;border-bottom:1px solid var(--accent)}
