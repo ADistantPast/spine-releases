@@ -1230,7 +1230,6 @@ function frame() {
       if (i !== nowIdx) setNow(i);
     }
     checkSleep();
-    syncOnChapter(t);
   }
 }
 
@@ -1962,7 +1961,6 @@ function startPlaying() {
   wantPlaying = true;
   syncPlayButton();
   const p = audio.play();
-  syncPlaybackPosition();
   /* play() rejects, and unhandled it reaches nothing but the console.
      AbortError is our own reload (or a pause) taking the source out from
      under it — expected, and already has a plan. Anything else means the
@@ -2568,7 +2566,7 @@ function startSaving() {
   saveTimer = setInterval(savePosition, 5000);
 }
 function stopSaving() { clearInterval(saveTimer); saveTimer = null; }
-// Keep consecutive Play/Pause saves in order even on a slow local backend.
+// Keep consecutive position saves in order even on a slow local backend.
 let positionSaveQueue = Promise.resolve();
 function savePosition() {
   if (!book) return positionSaveQueue;
@@ -2587,10 +2585,10 @@ async function syncPlaybackPosition() {
   try {
     const saved = await savePosition();
     if (saved && saved.error) return;
-    // Play can beat the initial status request when the app first opens.
+    // A quick pause can beat the initial status request when the app opens.
     if (!syncInfo.code) await refreshSync();
     await quietSync();
-  } catch (e) { /* keep playback usable offline; the next action tries again */ }
+  } catch (e) { /* keep playback usable offline; the next pause tries again */ }
 }
 window.addEventListener("beforeunload", savePosition);
 
@@ -4747,10 +4745,8 @@ document.addEventListener("click", e => {
 });
 addEventListener("load", refreshSync);
 
-/* Sync on explicit Play/Pause and chapter boundaries. Coalesce actions that
-   arrive during a transfer into a follow-up, so Pause cannot be dropped while
-   Play or manual Sync now is sending. Both paths share the same busy guard. */
-let syncedChapter = -1;
+/* Automatic cloud sync is Pause-only. Coalesce pauses during a transfer into
+   a follow-up, including behind manual Sync now. Both share the busy guard. */
 
 async function quietSync() {
   if (!syncInfo.code || syncInfo.lost) { quietSync.pending = false; return; }
@@ -4779,16 +4775,7 @@ async function quietSync() {
   }
 }
 
-function syncOnChapter(t) {
-  if (!book || !syncInfo.code) return;
-  const chs = book.chapters || [];
-  if (chs.length < 2) return;
-  let i = -1;
-  for (let k = 0; k < chs.length; k++) if (chs[k].t <= t) i = k;
-  if (i === syncedChapter) return;
-  if (syncedChapter !== -1) quietSync();   // crossed one, rather than arrived
-  syncedChapter = i;
-}
+
 
 /* ------------------------------------------- sync where the server has none
  *
