@@ -1962,6 +1962,7 @@ function startPlaying() {
   wantPlaying = true;
   syncPlayButton();
   const p = audio.play();
+  syncPlaybackPosition();
   /* play() rejects, and unhandled it reaches nothing but the console.
      AbortError is our own reload (or a pause) taking the source out from
      under it — expected, and already has a plan. Anything else means the
@@ -1983,6 +1984,7 @@ function stopPlaying() {
   wantPlaying = false;
   syncPlayButton();
   audio.pause();
+  syncPlaybackPosition();
 }
 
 $("playPause").onclick = () => {
@@ -2566,10 +2568,29 @@ function startSaving() {
   saveTimer = setInterval(savePosition, 5000);
 }
 function stopSaving() { clearInterval(saveTimer); saveTimer = null; }
+// Keep consecutive Play/Pause saves in order even on a slow local backend.
+let positionSaveQueue = Promise.resolve();
 function savePosition() {
-  if (!book) return;
-  book.position = audio.currentTime;
-  api(`/api/position/${book.id}`, { t: audio.currentTime });
+  if (!book) return positionSaveQueue;
+  const id = book.id, t = audio.currentTime;
+  book.position = t;
+  positionSaveQueue = positionSaveQueue.then(() =>
+    api(`/api/position/${id}`, { t })
+  ).catch(() => ({ error: "Could not save the listening position." }));
+  return positionSaveQueue;
+}
+
+// Playback never waits for the network. This publishes the actual playhead,
+// not the scrolled-to text, and does not invoke manual sync's jump-to-device UI.
+async function syncPlaybackPosition() {
+  if (!book || pendingStart !== null || audio.error) return;
+  try {
+    const saved = await savePosition();
+    if (saved && saved.error) return;
+    // Play can beat the initial status request when the app first opens.
+    if (!syncInfo.code) await refreshSync();
+    await quietSync();
+  } catch (e) { /* keep playback usable offline; the next action tries again */ }
 }
 window.addEventListener("beforeunload", savePosition);
 
@@ -4598,36 +4619,44 @@ let syncBusy = false;
 async function runSync() {
   if (syncBusy) return;
   syncBusy = true;
-  $("syncWrap").className = "sync busy";
-  $("syncLabel").textContent = "Syncing";
-  syncInfo.busy = true;
-  paintSync();
-  let r;
-  try { r = await syncApi("/api/sync/now", {}); }
-  finally { syncBusy = false; syncInfo.busy = false; }
-  await refreshSync();
-  paintSync();
-  if (!r || r.error) return toast((r && r.error) || "Could not sync.");
-  if (r.forgotten) return;   // Forget was pressed while this was in flight
-  if (r.lost) return toast("The sync record has gone.");
-  noteTheirPlace(r.others);
-  /* A newer reading for the book on screen. Going to it is the whole point
-     of having synced — leaving the page where it was means the position
-     only takes effect the next time the book is opened, which is how this
-     looked like it had not worked at all. Same as clicking that word. */
-  if (book && (r.pulledIds || []).indexOf(book.id) >= 0) {
-    if (theirsAt != null) playFrom(theirsAt);
-    closeSyncPop();
-    /* Name the place, not just the device: there was no way to tell a snap
-       that happened from one that silently did not. */
-    toast(theirsAt != null
-      ? `Moved to ${clock(theirsAt)} — where ${theirsBy || "your other device"} left off.`
-      : `Caught up to ${theirsBy || "your other device"}.`);
-    return renderPairs(r.unmatched || []);
+  try {
+    $("syncWrap").className = "sync busy";
+    $("syncLabel").textContent = "Syncing";
+    syncInfo.busy = true;
+    paintSync();
+    let r;
+    await positionSaveQueue;
+    try { r = await syncApi("/api/sync/now", {}); }
+    catch (e) { r = { error: "Could not sync." }; }
+    syncInfo.busy = false;
+    await refreshSync();
+    paintSync();
+    if (!r || r.error) return toast((r && r.error) || "Could not sync.");
+    if (r.forgotten) return;   // Forget was pressed while this was in flight
+    if (r.lost) return toast("The sync record has gone.");
+    noteTheirPlace(r.others);
+    /* A newer reading for the book on screen. Going to it is the whole point
+       of having synced — leaving the page where it was means the position
+       only takes effect the next time the book is opened, which is how this
+       looked like it had not worked at all. Same as clicking that word. */
+    if (book && (r.pulledIds || []).indexOf(book.id) >= 0) {
+      if (theirsAt != null) playFrom(theirsAt);
+      closeSyncPop();
+      /* Name the place, not just the device: there was no way to tell a snap
+         that happened from one that silently did not. */
+      toast(theirsAt != null
+        ? `Moved to ${clock(theirsAt)} — where ${theirsBy || "your other device"} left off.`
+        : `Caught up to ${theirsBy || "your other device"}.`);
+      return renderPairs(r.unmatched || []);
+    }
+    const n = (r.pulled || []).length;
+    toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
+    renderPairs(r.unmatched || []);
+  } finally {
+    syncBusy = false;
+    syncInfo.busy = false;
+    if (quietSync.pending) quietSync();
   }
-  const n = (r.pulled || []).length;
-  toast(n ? `Brought ${n} book${n > 1 ? "s" : ""} up to date.` : "Everything is in step.");
-  renderPairs(r.unmatched || []);
 }
 
 /* Books the other device has that nothing here answers to. Suggested by
@@ -4718,28 +4747,36 @@ document.addEventListener("click", e => {
 });
 addEventListener("load", refreshSync);
 
-/* A sync when a chapter ends, and when you press the dot. Nothing else.
-
-   Chapters are the right boundary: two or three an hour on an audiobook,
-   against a dozen for pausing, and it is the moment your place in the book
-   genuinely settles. A timer was rejected because a schedule hands a host a
-   log of when you listen; this is quiet enough to keep most of that while
-   meaning the other device is usually already right before you pick it up.
-
-   The first chapter seen after opening a book does not sync — that would
-   fire on every open, which is a timer wearing a different hat. */
+/* Sync on explicit Play/Pause and chapter boundaries. Coalesce actions that
+   arrive during a transfer into a follow-up, so Pause cannot be dropped while
+   Play or manual Sync now is sending. Both paths share the same busy guard. */
 let syncedChapter = -1;
 
 async function quietSync() {
-  // syncBusy as well as its own flag: the dot now starts a sync when it is
-  // pressed, and a chapter ending a second later must not start a second
-  // one against the same record — they would race for the same ETag and one
-  // would be told to try again, for nothing.
-  if (!syncInfo.code || syncInfo.lost || quietSync.busy || syncBusy) return;
-  quietSync.busy = true;
-  try { await syncApi("/api/sync/now", {}); await refreshSync(); }
-  catch (e) { /* offline is not worth interrupting a book for */ }
-  quietSync.busy = false;
+  if (!syncInfo.code || syncInfo.lost) { quietSync.pending = false; return; }
+  quietSync.pending = true;
+  if (syncBusy) return;
+  syncBusy = true;
+  try {
+    do {
+      quietSync.pending = false;
+      syncInfo.busy = true;
+      $("syncWrap").className = "sync busy";
+      $("syncLabel").textContent = "Syncing";
+      paintSync();
+      try {
+        const saved = await positionSaveQueue;
+        if (!saved || !saved.error) await syncApi("/api/sync/now", {});
+      } catch (e) { /* offline: leave the local position for the next sync */ }
+      syncInfo.busy = false;
+      await refreshSync();
+      paintSync();
+    } while (quietSync.pending && syncInfo.code && !syncInfo.lost);
+  } finally {
+    quietSync.pending = false;
+    syncInfo.busy = false;
+    syncBusy = false;
+  }
 }
 
 function syncOnChapter(t) {
