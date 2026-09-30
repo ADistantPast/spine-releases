@@ -660,6 +660,7 @@ const READ_ANCHOR = 0.40;
    scrollend releases ownership early; the deadline also works on older WebViews
    and for a no-op jump, where no scrollend event is emitted. */
 let readerJumpUntil = 0;
+let readerJumpId = 0;
 $("reader").addEventListener("scrollend", () => {
   if (!readerJumpUntil) return;
   readerJumpUntil = 0;
@@ -668,6 +669,7 @@ $("reader").addEventListener("scrollend", () => {
 
 /* Put the moment at `t` near the top of the reader without re-rendering. */
 function scrollToTime(t, behavior) {
+  const jumpId = ++readerJumpId;
   const i = wordAt(t);
   const el = pw.el[Math.max(0, i)];
   if (!el) return;
@@ -696,7 +698,7 @@ function scrollToTime(t, behavior) {
 
      Only if nobody else has scrolled since, so it can never yank a reader
      who took hold of the page in between. */
-  if (far) {
+  if (far || behavior === "instant") {
     /* Twice more, at a frame and at a quarter of a second.
        One frame is not enough: the layout keeps settling as paragraphs come
        into view, and Chromium's own scroll anchoring moves scrollTop while
@@ -706,7 +708,7 @@ function scrollToTime(t, behavior) {
        scroll event was a person (see the follow logic below). */
     const startedAt = performance.now();
     const settle = () => {
-      if (lastUserInput > startedAt) return;          // they took over
+      if (jumpId !== readerJumpId || lastUserInput > startedAt) return;          // they took over
       const e2 = pw.el[Math.max(0, wordAt(t))];
       if (!e2) return;
       const again = reader.scrollTop + e2.getBoundingClientRect().top
@@ -2420,14 +2422,12 @@ function snapToPlayhead(behavior) {
   browseT = audio.currentTime;
   $("seek").value = Math.floor(browseT); paintThumb();
   if (compact) { renderLyric(audio.currentTime, true); return; }
-  /* Back on the page: scroll AND move the lit word. scrollToTime works out
-     which word it is only to know what to scroll to — it never touches the
-     highlight, so on its own this left whichever word was lit before still
-     lit. While playing the frame loop corrects that within about 16ms and you
-     never see it; while paused nothing does, and the wrong word just sits
-     there. Same order playFrom() uses: scroll, then light. */
-  scrollToTime(audio.currentTime, behavior || "smooth");
-  setNow(wordAt(audio.currentTime));
+  /* Realize the target paragraph before measuring it. The return pill is a
+     jump, not a tour of the intervening paragraphs. Fullscreen's taller
+     viewport skipped the far-jump correction that cancelled the old smooth
+     animation in normal mode. Line-by-line following stays smooth. */
+  setNow(wordAt(audio.currentTime), true);
+  scrollToTime(audio.currentTime, behavior || "instant");
 }
 $("jumpNow").onclick = () => snapToPlayhead();
 
@@ -3096,6 +3096,7 @@ function libRowHtml(b) {
 }
 
 function renderLibrary() {
+  cancelLibraryClick();
   // A re-render replaces the very row a finger is holding. Let go of it first.
   if (rdRow || rdArm) rdReset();
   const q = libraryQuery.trim().toLowerCase();
@@ -3226,6 +3227,7 @@ function wireLibraryDrag() {
       /* Never start a drag out of a field being typed in — the title and the
          series field are both edited in place inside this row. */
       if (e.target.closest("input, [contenteditable='true']")) { e.preventDefault(); return; }
+      cancelLibraryClick();
       dragBookId = row.dataset.open;
       /* A named type, never "Files". The window-level veil that catches a
          .spinebook dragged in from the desktop keys off "Files" being
@@ -3396,6 +3398,7 @@ function rdReset() {
 }
 
 function rdLift() {
+  cancelLibraryClick();
   const row = rdArm;
   rdTimer = null; rdArm = null;
   if (!row || !row.isConnected) return;
@@ -3432,11 +3435,12 @@ function wireLibraryTouchDrag() {
   $("libList").querySelectorAll(".lib-row").forEach(row => {
     row.addEventListener("pointerdown", e => {
       if (e.pointerType === "mouse") return;      // a mouse has its own drag
+      if (e.isPrimary === false || (e.button !== undefined && e.button !== 0)) return;
       if (rdRow || rdArm) return;                 // one finger at a time
-      /* Never out of a field being typed in, and never off one of the row's
-         own buttons: resting a thumb on Status, Last Time, the series field
-         or the trash for half a second must not pick the shelf up. */
-      if (e.target.closest("input, textarea, button, [contenteditable='true']")) return;
+      /* Hold anywhere, including action buttons. After a lift, the drawer
+         swallows the click so dropping never opens, sends, or deletes a book.
+         An active text editor still belongs to typing. */
+      if (e.target.closest("input, textarea, select, [contenteditable='true']")) return;
       /* ...and not while anything in the list is mid-edit. Committing that
          edit re-renders the list out from under the gesture. */
       if ($("libList").querySelector("[contenteditable='true'], .series-btn.editing")) return;
@@ -3476,6 +3480,76 @@ function wireLibraryTouchDrag() {
   });
 }
 
+/* A second tap anywhere on the row body edits its title. Delay opening
+   until that tap can arrive; named action buttons keep their own actions. */
+let libraryClickTimer = null;
+function cancelLibraryClick() {
+  clearTimeout(libraryClickTimer);
+  libraryClickTimer = null;
+}
+function renameLibraryBook(row) {
+  cancelLibraryClick();
+  const el = row.querySelector(".row-n");
+  if (!el || el.isContentEditable) return;
+  const id = row.dataset.open, cur = el.textContent.trim();
+  el.contentEditable = "true";
+  el.focus();
+  document.getSelection().selectAllChildren(el);
+  let done = false;
+  const commit = async save => {
+    if (done) return;
+    done = true;
+    el.contentEditable = "false";
+    const name = el.textContent.trim().slice(0, 200);
+    if (!save || !name || name === cur) { el.textContent = cur; return; }
+    try {
+      const r = await api('/api/title/' + id, { title: name });
+      if (!r.title) throw new Error(r.error || "The title was not saved.");
+      const item = libraryItems.find(b => b.id === id);
+      if (item) item.title = r.title;
+      if (book && book.id === id) $("title").textContent = r.title;
+      renderLibrary();
+    } catch (e) { el.textContent = cur; toast("Could not rename this book. Try again."); }
+  };
+  el.onblur = () => commit(true);
+  el.onkeydown = e => {
+    if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); el.onblur = null; commit(false); }
+  };
+}
+function wireLibraryRowActions() {
+  $("libList").querySelectorAll(".lib-row").forEach(row => {
+    let lastTap = -Infinity;
+    const isControl = target => target.closest("button, input, textarea, select, a, [contenteditable='true']");
+    row.addEventListener("pointerdown", cancelLibraryClick);
+    row.onclick = e => {
+      if (isControl(e.target)) return;
+      e.stopPropagation();
+      if (rdRow || performance.now() - rdEndedAt < 400) return;
+      cancelLibraryClick();
+      const now = performance.now();
+      if (now - lastTap < 400) {
+        lastTap = -Infinity;
+        renameLibraryBook(row);
+        return;
+      }
+      lastTap = now;
+      libraryClickTimer = setTimeout(() => {
+        libraryClickTimer = null;
+        if (row.isConnected && !rdRow && !rdArm) loadBook(row.dataset.open);
+      }, 400);
+    };
+    row.ondblclick = e => {
+      if (isControl(e.target)) return;
+      e.preventDefault(); e.stopPropagation();
+      renameLibraryBook(row);
+    };
+    row.addEventListener("contextmenu", e => {
+      if (!e.target.closest("input, textarea, [contenteditable='true']")) e.preventDefault();
+    });
+  });
+}
+
 function wireLibrary() {
   const body = $("libList");
 
@@ -3497,36 +3571,9 @@ function wireLibrary() {
       const i = btn.dataset.openAt.indexOf("|");
       loadBook(btn.dataset.openAt.slice(0, i), btn.dataset.openAt.slice(i + 1));
     });
-  body.querySelectorAll("[data-open]").forEach(r =>
-    r.onclick = () => loadBook(r.dataset.open));
+  wireLibraryRowActions();
 
-  /* Rename in place, the same way chapter names and the series field work.
-     The row's own click opens the book, so this has to stop propagation or
-     every rename would also start playback. */
-  body.querySelectorAll(".lib-row .row-n").forEach(el => el.onclick = async e => {
-    e.stopPropagation();
-    if (el.isContentEditable) return;
-    const id = el.closest("[data-open]").dataset.open;
-    const cur = el.textContent.trim();
-    el.contentEditable = "true";
-    el.focus();
-    document.getSelection().selectAllChildren(el);
-    const commit = async save => {
-      el.contentEditable = "false";
-      const name = el.textContent.trim().slice(0, 200);
-      if (!save || !name || name === cur) { el.textContent = cur; return; }
-      const r = await api(`/api/title/${id}`, { title: name });
-      const item = libraryItems.find(b => b.id === id);
-      if (item) item.title = r.title;
-      if (book && book.id === id) $("title").textContent = r.title;   // header too
-      renderLibrary();
-    };
-    el.onblur = () => commit(true);
-    el.onkeydown = ev => {
-      if (ev.key === "Enter") { ev.preventDefault(); el.blur(); }
-      if (ev.key === "Escape") { ev.preventDefault(); el.onblur = null; commit(false); }
-    };
-  });
+
 
   /* Keeping a copy. Offered per book rather than done for you: it is
      hundreds of megabytes, and it is the reader's disk. On Safari there are
@@ -5241,16 +5288,15 @@ addEventListener("touchstart", e => {
 /* And the way back out with a mouse, which was missing outright: three clicks
    on the title cannot be it, because reading mode hides the bar and the title
    with it. The margins either side of the column are the one part of a
-   reading page that is deliberately empty, so three clicks there bring the
-   interface back — e.detail is the click count, so no timer of our own.
+   reading page that is deliberately empty, so three clicks there toggle the
+   interface in either direction — e.detail is the click count, so no timer of our own.
 
    Only the reader itself and the column's own empty space. A triple-click on
    a paragraph is a text selection, and a selection here opens a note. */
 { const r = $("reader");
   if (r) r.addEventListener("click", e => {
-    if (!$("app").classList.contains("reading")) return;
     if (e.detail !== 3) return;
     if (e.target !== r && !e.target.classList.contains("page")) return;
-    toggleReading(false);
+    toggleReading();
   });
 }
