@@ -2429,7 +2429,19 @@ function snapToPlayhead(behavior) {
   setNow(wordAt(audio.currentTime), true);
   scrollToTime(audio.currentTime, behavior || "instant");
 }
-$("jumpNow").onclick = () => snapToPlayhead();
+/* On Android, the synthetic mouse/focus work after a touch click can
+   re-enter the text under this disappearing button. With the transport hidden,
+   the phone trace showed thousands of content-visibility paragraphs being laid
+   out in one 7.7-second task AFTER our click handler finished. Do not let a
+   pointer tap take focus; keep click activation and keyboard focus intact. */
+function wirePlayheadSnap() {
+  const button = $("jumpNow");
+  button.addEventListener("pointerdown", e => {
+    if (e.isPrimary && e.button === 0) e.preventDefault();
+  });
+  button.onclick = () => snapToPlayhead();
+}
+wirePlayheadSnap();
 
 /* Snap to the voice whenever the page comes back into view.
 
