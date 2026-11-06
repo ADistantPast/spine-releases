@@ -76,6 +76,7 @@ Untick it whenever you want the space back; your place and notes stay.
 |---|---|
 | **Windows** | `Spine-Installer-<version>.exe` from [the newest release that has one](../../releases) — about 1 GB. Most releases only change the interface and update in place, so they carry no installer; any recent one installs, and Spine brings itself up to date on its next launch. |
 | **Android** | [**Spine-latest.apk**](../../releases/latest/download/Spine-latest.apk) — a link that always points at the newest build |
+| **Wear OS watch** | [Spine-Wear-1.1.42.apk](../../releases/download/v1.1.42/Spine-Wear-1.1.42.apk) — install on the watch, with the matching phone app. Controls phone playback and book selection. |
 
 Those badges read the release list directly, so the version above is always
 the current one — nothing here has to be edited when a release goes out.
@@ -105,6 +106,14 @@ apps from wherever you downloaded it — that permission only lets the file be
 opened, and you can turn it back off afterwards.
 
 ---
+
+### Book covers
+
+Tap the square cover button beside an audiobook title to choose an image. Covers
+are shared with your cloud-paired Spine installs and supplied to Android media
+displays, including the watch’s Now Playing screen. Both installs need the cover
+update and the same book. Windows receives this through its interface updater;
+Android needs version 1.1.42 or newer. The Wear OS APK goes on the watch only.
 
 ## What you get
 

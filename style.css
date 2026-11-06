@@ -2512,3 +2512,10 @@ h1[contenteditable="true"]{border-bottom-color:var(--accent);outline:none}
  * row and get big enough to be worth hitting. */
 .sync-pop .sync-row.two{flex-wrap:nowrap}
 .sync-pop .sync-row.two .btn{flex:1 1 0;padding:9px 10px;font-size:12px}
+
+/* Square book art, also published to Android's media session. */
+.bar-title.cover-enabled{position:relative;padding-left:54px}
+.cover-btn{position:absolute;left:0;top:50%;transform:translateY(-50%);width:42px;height:42px;padding:0;border:1px solid var(--hair);border-radius:7px;background:var(--panel);color:var(--muted);overflow:hidden;cursor:pointer}
+.cover-btn svg{width:25px;height:25px;display:block;margin:auto}
+.cover-btn img{display:block;width:100%;height:100%;object-fit:cover}
+.cover-btn [hidden]{display:none}

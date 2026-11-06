@@ -259,6 +259,8 @@ async function loadBook(id, startAt = "last") {
   const b = await api(`/api/book/${id}`);
   if (b.error) return toast(b.error);
   book = b;
+  updateBookCover();
+  syncBookCovers();
   book.chapters = book.chapters || [];
   book.notes = book.notes || [];
   hiddenChapters = new Set();
@@ -3760,6 +3762,7 @@ function wireLibrary() {
       if (gone && gone.error) return toast(gone.error);   // the row stays; nothing was removed
       if (book && book.id === id) {      // it was the open one — clear the view
         book = null;
+        updateBookCover();
         audio.pause();
         audio.removeAttribute("src");
         audio.load();
@@ -5336,3 +5339,119 @@ addEventListener("touchstart", e => {
     toggleReading();
   });
 }
+
+/* ---- shared square cover art (Android, desktop and web) ----------------- */
+const COVER_SERVICE = "https://spine-sync.spine-app.workers.dev";
+let coverDbPromise, coverSyncBusy = false, coverSyncAgain = false;
+function openCoverDb() {
+  if (!coverDbPromise) coverDbPromise = new Promise((resolve,reject) => {
+    const request = indexedDB.open("SpineCoverArt",1);
+    request.onupgradeneeded = () => request.result.createObjectStore("covers");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return coverDbPromise;
+}
+async function readBookCover(id) {
+  if (window.SpineNative?.coverPayload) return JSON.parse(window.SpineNative.coverPayload(id));
+  const db=await openCoverDb();
+  return new Promise((resolve,reject) => {
+    const request=db.transaction("covers").objectStore("covers").get(id);
+    request.onsuccess=()=>resolve(request.result || {at:0,hash:"",data:""});
+    request.onerror=()=>reject(request.error);
+  });
+}
+async function writeBookCover(id,cover) {
+  if (window.SpineNative?.applyCoverPayload) {
+    if (!window.SpineNative.applyCoverPayload(id,JSON.stringify(cover))) throw new Error("Could not save the cover.");
+    return;
+  }
+  const db=await openCoverDb();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction("covers","readwrite");tx.objectStore("covers").put(cover,id);
+    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+}
+async function coverHash(data) {
+  const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function chooseBookCover() {
+  if (!book) return;
+  const id=book.id;
+  if(window.SpineNative?.chooseCover) { window.SpineNative.chooseCover(id);return; }
+  const input=document.createElement("input");input.type="file";input.accept="image/*";
+  input.onchange=async()=>{
+    if (!input.files?.[0]) return;
+    try {
+      const image=await createImageBitmap(input.files[0]);
+      const side=Math.min(image.width,image.height),canvas=document.createElement("canvas");canvas.width=canvas.height=320;
+      canvas.getContext("2d").drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,320,320);image.close();
+      const data=canvas.toDataURL("image/jpeg",.85).split(",")[1];
+      if(data.length>122880)throw new Error("Choose a smaller image.");
+      await writeBookCover(id,{at:Math.max(Date.now(),(await readBookCover(id)).at+1),hash:await coverHash(data),data});
+      window.SpineCoverChanged(id);
+    }catch(e){toast(e.message || "Could not read that image.");}
+  };
+  input.click();
+}
+async function updateBookCover() {
+  const button=$("btnCover"),image=$("coverImage");if(!button)return;
+  button.hidden=!book;button.parentElement.classList.toggle("cover-enabled",!!book);
+  if(!book)return;
+  const id=book.id;let cover;
+  try{cover=await readBookCover(id);}catch{return;}
+  if(book?.id!==id)return;
+  image.hidden=!cover.data;button.querySelector(".cover-placeholder").toggleAttribute("hidden",!!cover.data);
+  button.title=cover.data?"Change audiobook cover":"Add audiobook cover";button.setAttribute("aria-label",button.title);
+  const src=cover.data?"data:image/jpeg;base64,"+cover.data:"";
+  if(src)image.src=src;else image.removeAttribute("src");
+  button.onclick=chooseBookCover;
+  button.oncontextmenu=e=>{
+    if(!cover.data)return;e.preventDefault();
+    if(confirm("Remove this audiobook cover from your paired Spine devices?"))
+      readBookCover(id).then(old=>writeBookCover(id,{at:Math.max(Date.now(),old.at+1),hash:"",data:""})).then(()=>window.SpineCoverChanged(id)).catch(()=>toast("Could not remove the cover."));
+  };
+  if(navigator.mediaSession && window.MediaMetadata){
+    navigator.mediaSession.metadata=new MediaMetadata({title:book.title,artist:"Spine",album:book.title,
+      artwork:src?[{src,sizes:"320x320",type:"image/jpeg"}]:[]});
+  }
+}
+async function coverCall(path,body) {
+  const response=await fetch(COVER_SERVICE+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!response.ok)throw new Error("Cover sync unavailable");return response.json();
+}
+async function syncBookCovers() {
+  if(coverSyncBusy){coverSyncAgain=true;return;}
+  coverSyncBusy=true;
+  try {
+    const info=typeof syncApi==="function"?await syncApi("/api/sync"):await api("/api/sync");
+    const id=String(info?.code || "").replace(/[^A-Z0-9]/gi,"").toUpperCase();if(id.length!==26)return;
+    const shelf=await api("/api/library");if(!Array.isArray(shelf))return;
+    const index=(await coverCall("/cover/index",{id})).covers || {};
+    for(const b of shelf){
+      const slot=(book?.id===b.id && book.syncSlot) || b.syncSlot || b.id;
+      if(!/^[A-Za-z0-9_-]{1,100}$/.test(slot))continue;
+      const local=await readBookCover(b.id),remote=index[slot] || {at:0,hash:""};
+      if(local.at>remote.at || (local.at===remote.at && local.hash>remote.hash)){
+        await coverCall("/cover/put",{id,slot,...local});
+      }else if(remote.at>local.at || (remote.at===local.at && remote.hash>local.hash)){
+        // A metadata-only change needs no repeat image download.
+        const incoming=remote.hash===local.hash?{...local,at:remote.at}:(await coverCall("/cover/get",{id,slot})).cover;
+        if(incoming.data && await coverHash(incoming.data)!==incoming.hash)throw new Error("Cover checksum differs");
+        await writeBookCover(b.id,incoming);
+        if(book?.id===b.id)await updateBookCover();
+      }
+    }
+  }catch(e){ /* Keep local art offline; retry when the app resumes or at the next poll. */ }
+  finally{coverSyncBusy=false;if(coverSyncAgain){coverSyncAgain=false;setTimeout(syncBookCovers,250);}}
+}
+window.SpineCoverChanged=id=>{if(book?.id===id)updateBookCover();syncBookCovers();};
+setInterval(()=>{if(!document.hidden)syncBookCovers();},30000);
+window.addEventListener("focus",syncBookCovers);
+document.addEventListener("click",e=>{if(e.target.closest?.("#syncGo"))syncBookCovers();});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncBookCovers();});
+const coverResume=window.SpineResumed;
+window.SpineResumed=function(){if(coverResume)coverResume.apply(this,arguments);syncBookCovers();};
+setTimeout(()=>{updateBookCover();syncBookCovers();},1200);
+/* ---- end shared square cover art ------------------------------------- */
